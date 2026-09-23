@@ -52,7 +52,7 @@ async function loadLive() {
       const res = await fetch('./ui/data', { headers: { Accept: 'application/json' } });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      Object.assign(demo, { asOf: data.meta.asOf, reviewDays: data.meta.reviewDays, live: true,
+      Object.assign(demo, { asOf: data.meta.asOf, reviewDays: data.meta.reviewDays, live: true, backtest: data.meta.backtest, rulesCount: data.meta.rulesCount,
         leadText: data.meta.leadText, orderValue: data.meta.orderValue, warnings: data.meta.warnings });
       return data;
     } catch (error) {

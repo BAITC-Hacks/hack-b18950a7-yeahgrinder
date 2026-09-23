@@ -3,13 +3,71 @@
 Форма товара совпадает с демо-набором web/mockDashboard.js, поэтому интерфейс работает на
 реальных данных без переделки. Все числа — из engine/run.py (тот же расчёт, что у API и агента).
 """
+import copy
 from functools import lru_cache
 
 import pandas as pd
 
+from agent.memory import Memory
+from engine import calc
 from engine.load import load
 from engine.models import Params
-from engine.run import compute
+from engine.run import SUPPLIER_OUT, compute
+
+USER = "local"
+
+
+def effective_params() -> Params:
+    """Параметры из config.yaml + то, что менеджер сохранил в админке."""
+    settings = Params.from_yaml().model_dump(mode="json")
+    settings.update(Memory().preferences(USER))
+    return Params.model_validate(settings)
+
+
+@lru_cache(maxsize=1)
+def backtest() -> dict:
+    """Проверка на истории: расчёт на срезе «4 месяца назад» против того, что случилось потом.
+
+    Реальный дефицит — остаток на 1-е число ≤ 0 в один из двух месяцев после среза у товара,
+    который продавался в три месяца до среза. Долю ложных тревог не считаем: менеджер в эти
+    месяцы заказывал сам, и часть «критичных» он просто спас.
+    """
+    ds = load()
+    cur = ds.as_of.to_period("M").to_timestamp()
+    cut = cur - pd.DateOffset(months=3)          # срез: конец месяца за 3 месяца до текущего
+    check = [cut + pd.DateOffset(months=1), cut + pd.DateOffset(months=2)]
+    d = copy.copy(ds)
+    d.lines = ds.lines[ds.lines["date"] < cut]
+    d.stock = ds.stock[ds.stock["month"] <= cut]
+    d.transit = ds.transit.iloc[0:0]
+    d.stock_current = pd.Series(dtype=float)
+    d.as_of = d.lines["date"].max()
+    orders = calc.compute(d, calc.Params()).orders.set_index("code")
+    st = ds.stock.pivot_table(index="code", columns="month", values="stock", aggfunc="sum")
+    sales = (ds.lines.assign(m=ds.lines["date"].dt.to_period("M").dt.to_timestamp())
+             .pivot_table(index="code", columns="m", values="qty", aggfunc="sum").reindex(st.index).fillna(0))
+    before = [c for c in sales.columns if cut - pd.DateOffset(months=3) <= c < cut]
+    active = sales[before].sum(axis=1) > 0
+    zero = pd.Series(False, index=st.index)
+    for m in check:
+        if m in st.columns:
+            zero |= st[m] <= 0
+    real = active & zero
+    urg = orders.reindex(st.index)["urgency"].fillna("не нужно")[real]
+    counts = urg.value_counts().to_dict()
+    flagged = {k: int(counts.get(k, 0)) for k in ["критично", "высокая", "плановая"]}
+    warned = sum(flagged.values())
+    hits = orders[orders.index.isin(real[real].index) & (orders["urgency"] == "критично")]
+    hits = hits.sort_values("order_qty", ascending=False).head(5)
+    months_ru = ["январе", "феврале", "марте", "апреле", "мае", "июне", "июле", "августе", "сентябре",
+                 "октябре", "ноябре", "декабре"]
+    return {
+        "as_of": f"{d.as_of:%d.%m.%Y}", "window": f"{months_ru[check[0].month - 1]}–{months_ru[check[-1].month - 1]} {check[-1].year}",
+        "real": int(real.sum()), "warned": int(warned), "warned_pct": round(warned / max(int(real.sum()), 1) * 100),
+        "flagged": flagged, "missed": int(counts.get("не нужно", 0)),
+        "examples": [{"sku": c, "name": r["name"], "supplier": SUPPLIER_OUT.get(r["supplier"], r["supplier"]),
+                      "order_qty": float(r["order_qty"]), "unit": r["unit"]} for c, r in hits.iterrows()],
+    }
 
 MONTHS = ["Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"]
 MONTHS_GEN = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября",
@@ -151,9 +209,10 @@ def _products(res, growth, ds) -> list[dict]:
 def payload(growth_pct: float = 20.0) -> dict:
     """Всё, что нужно интерфейсу, одним ответом. Кэшируется до перезапуска сервера."""
     ds = load()
-    params = Params.from_yaml()
-    res = compute(ds, params)
-    growth = compute(ds, params.model_copy(update={"growth_pct": growth_pct}))
+    params = effective_params()
+    rules = Memory().rules(USER)
+    res = compute(ds, params, rules)
+    growth = compute(ds, params.model_copy(update={"growth_pct": growth_pct}), rules)
     lead = {("IEK" if s == "ИЭК" else s): v for s, v in ds.lead_default.items()}
     sources = [
         {"name": "Динамика продаж", "type": "Строки накладных", "date": f"{ds.as_of:%d.%m.%Y}", "status": "Подключено",
@@ -168,6 +227,7 @@ def payload(growth_pct: float = 20.0) -> dict:
     ]
     return {
         "meta": {"asOf": f"{ds.as_of:%Y-%m-%d}", "reviewDays": params.review_days, "growthPct": growth_pct,
+                 "backtest": backtest(), "rulesCount": len(rules),
                  "live": True, "leadText": {s: f"{_days(d)} · {src}" for s, (d, src) in lead.items()},
                  "warnings": res.warnings, "orderValue": {s: float(v) for s, v in
                                                           res.orders.groupby("supplier")["order_value"].sum().items()

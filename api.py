@@ -182,5 +182,67 @@ def ui_data(growth_pct: float = Query(20.0, ge=-50, le=100)):
     return guarded(web_data.payload, growth_pct)
 
 
+# ---------------------------------------------------------------- админка (web/, страница «Админ»)
+
+class PreferencesIn(BaseModel):
+    review_days: int | None = Field(default=None, ge=1, le=365)
+    lead_time_days: dict[Supplier, int | None] | None = None
+    growth_pct: float | None = Field(default=None, ge=-50, le=100)
+    service_z: float | None = Field(default=None, ge=0, le=4)
+
+
+class AdminRuleIn(BaseModel):
+    supplier: Supplier
+    sku: str = Field(min_length=1, max_length=64)
+    min_qty: int = Field(ge=0)
+
+
+def _admin_state():
+    memory = service().memory
+    defaults = Params.from_yaml().model_dump(mode="json")
+    with memory.connect() as db:
+        approvals = [dict(r) for r in db.execute(
+            "SELECT approval_id, run_id, supplier, user_id, decision, reason, created_at FROM approvals ORDER BY created_at DESC LIMIT 20")]
+    rules = [{"supplier": s, "sku": k, "min_qty": q} for (s, k), q in memory.rules(web_data.USER).items()]
+    return {"defaults": {k: defaults[k] for k in ["review_days", "lead_time_days", "growth_pct", "service_z"]},
+            "preferences": memory.preferences(web_data.USER), "rules": rules,
+            "runs": memory.list_runs(10), "approvals": approvals}
+
+
+@app.get("/admin/state")
+def admin_state():
+    return _admin_state()
+
+
+@app.post("/admin/preferences")
+def admin_preferences(body: PreferencesIn):
+    value = {k: v for k, v in body.model_dump().items() if v is not None}
+    if "lead_time_days" in value:  # пустой срок = «из данных», такие ключи не сохраняем
+        value["lead_time_days"] = {k: v for k, v in value["lead_time_days"].items() if v is not None}
+        if not value["lead_time_days"]:
+            del value["lead_time_days"]
+    settings = Params.from_yaml().model_dump(mode="json")
+    settings.update(value)
+    guarded(Params.model_validate, settings)  # то же правило, что и в расчёте
+    service().memory.save_preferences(web_data.USER, value)
+    web_data.payload.cache_clear()
+    return {"saved": True, "preferences": value}
+
+
+@app.post("/admin/rules")
+def admin_rule(body: AdminRuleIn):
+    guarded(service().memory.save_rule, web_data.USER, body.supplier, body.sku.strip(), body.min_qty)
+    web_data.payload.cache_clear()
+    return {"saved": True}
+
+
+@app.delete("/admin/rules")
+def admin_rule_delete(supplier: Supplier, sku: str):
+    with service().memory.connect() as db:
+        db.execute("DELETE FROM overrides WHERE user_id=? AND supplier=? AND sku=?", (web_data.USER, supplier, sku))
+    web_data.payload.cache_clear()
+    return {"deleted": True}
+
+
 if WEB.exists():  # последним: иначе перехватит маршруты API
     app.mount("/", StaticFiles(directory=WEB, html=True), name="web")
