@@ -2,6 +2,7 @@
 import json
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage, trim_messages
+from langchain_core.runnables import RunnableLambda
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode
@@ -13,6 +14,7 @@ from agent.prompts import EXPLAINER_PROMPT, SYSTEM_PROMPT
 from agent.providers import chat_model
 from agent.security import ALLOWED_TOOLS, MAX_AGENT_STEPS
 from agent.tools import make_tools
+from agent.tracing import traced_turn
 
 CHECKPOINTER = InMemorySaver()  # short-term memory, keyed by thread_id
 
@@ -31,8 +33,8 @@ def route(state: ChatState):
     if not calls:
         return END
     if state.get("steps", 0) >= MAX_AGENT_STEPS or any(c["name"] not in ALLOWED_TOOLS for c in calls):
-        return "refuse"
-    return "tools"
+        return "refuse-tool-call"
+    return "run-tools"
 
 
 def build_agent(service, run_id: str, user_id: str = "local", model=None):
@@ -60,30 +62,49 @@ def build_agent(service, run_id: str, user_id: str = "local", model=None):
                                                  "или превышен лимит шагов. Уточните вопрос.")]}
 
     graph = StateGraph(ChatState)
-    graph.add_node("agent", agent)
-    graph.add_node("tools", ToolNode(tools))
-    graph.add_node("refuse", refuse)
-    graph.add_edge(START, "agent")
-    graph.add_conditional_edges("agent", route, ["tools", "refuse", END])
-    graph.add_edge("tools", "agent")
-    graph.add_edge("refuse", END)
+    graph.add_node("call-model", agent)
+    graph.add_node("run-tools", ToolNode(tools))
+    graph.add_node("refuse-tool-call", refuse)
+    graph.add_edge(START, "call-model")
+    graph.add_conditional_edges("call-model", RunnableLambda(route, name="route-next-step"),
+                                ["run-tools", "refuse-tool-call", END])
+    graph.add_edge("run-tools", "call-model")
+    graph.add_edge("refuse-tool-call", END)
     return graph.compile(checkpointer=CHECKPOINTER)
 
 
 def ask(service, run_id: str, question: str, thread_id: str, user_id: str = "local",
         model=None, critic=None, use_critic: bool = True) -> dict:
     app = build_agent(service, run_id, user_id, model)
-    config = {"configurable": {"thread_id": f"{user_id}:{run_id}:{thread_id}"}, "recursion_limit": 4 * MAX_AGENT_STEPS}
-    before = len(app.get_state(config).values.get("messages", []))
-    state = app.invoke({"messages": [HumanMessage(question)], "steps": 0}, config)
-    turn = state["messages"][before:]
-    answer = turn[-1].content if turn else ""
-    outputs = [m.content for m in turn if isinstance(m, ToolMessage)]
-    used = [c["name"] for m in turn if isinstance(m, AIMessage) for c in (m.tool_calls or [])]
-    unsupported = check_numbers(answer, outputs)
-    verdict = review(question, outputs, answer, critic) if use_critic else {"status": "skipped", "issues": []}
-    return {"answer": answer, "tools_used": used, "unsupported_numbers": unsupported,
-            "numbers_ok": not unsupported, "critic": verdict}
+    thread = f"{user_id}:{run_id}:{thread_id}"
+    config = {"configurable": {"thread_id": thread}, "recursion_limit": 4 * MAX_AGENT_STEPS}
+    with traced_turn(user_id, thread, run_id, question) as trace:
+        before = len(app.get_state(config).values.get("messages", []))
+        state = app.invoke({"messages": [HumanMessage(question)], "steps": 0},
+                           {**config, "callbacks": trace.callbacks, "run_name": "run-procurement-agent"})
+        turn = state["messages"][before:]
+        answer = turn[-1].content if turn else ""
+        outputs = [m.content for m in turn if isinstance(m, ToolMessage)]
+        used = [c["name"] for m in turn if isinstance(m, AIMessage) for c in (m.tool_calls or [])]
+        with trace.step("verify-numbers", "guardrail", input=answer) as step:
+            # Known facts: every tool result and tool-call argument in the whole thread (the agent may
+            # answer a follow-up from an earlier turn), the question itself and the run parameters.
+            thread_facts = [m.content for m in state["messages"] if isinstance(m, ToolMessage)]
+            thread_facts += [json.dumps(c["args"], ensure_ascii=False) for m in state["messages"]
+                             if isinstance(m, AIMessage) for c in (m.tool_calls or [])]
+            params = json.dumps(service.get_result(run_id).params.model_dump(mode="json"), ensure_ascii=False)
+            unsupported = check_numbers(answer, thread_facts + [question, params])
+            step.update(output={"numbers_ok": not unsupported, "unsupported_numbers": unsupported})
+        if use_critic:
+            with trace.step("review-answer", "evaluator", input={"question": question, "answer": answer}) as step:
+                verdict = review(question, outputs, answer, critic)
+                step.update(output=verdict)
+        else:
+            verdict = {"status": "skipped", "issues": []}
+        reply = {"answer": answer, "tools_used": used, "unsupported_numbers": unsupported,
+                 "numbers_ok": not unsupported, "critic": verdict, "trace_id": trace.trace_id}
+        trace.finish(reply)
+    return reply
 
 
 class Brief(BaseModel):

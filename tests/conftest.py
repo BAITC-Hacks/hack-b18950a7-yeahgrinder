@@ -10,6 +10,13 @@ SKUS = {'IEK': '001_', 'Systeme Electric': '002_'}      # коды 1С у пос
 DATA_NAME = {'IEK': 'ИЭК', 'Systeme Electric': 'Systeme Electric'}
 
 
+@pytest.fixture(autouse=True)
+def no_real_langfuse(monkeypatch):
+    # Real keys from .env must not send test runs to the Langfuse project.
+    for name in ('LANGFUSE_PUBLIC_KEY', 'LANGFUSE_SECRET_KEY'):
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture
 def dataset():
     """Два товара по 300 шт./мес. с 01.2024, остаток на складе 0 — как в спеке Алдияра,

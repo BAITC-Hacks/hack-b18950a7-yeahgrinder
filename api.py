@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from agent.graph import AgentUnavailable, ask, explain_run
+from agent import tracing
 from agent.providers import status as ai_status
 from engine.load import DataError
 from engine.models import Params, Supplier, Urgency
@@ -19,6 +20,17 @@ import web_data
 
 app = FastAPI(title="QadamSupply API", version="1.0")
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+
+@app.middleware("http")
+async def revalidate_web_assets(request, call_next):
+    # Без этого браузер держит старые app.js/styles.css после обновления; no-cache = сверка по ETag (304).
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.endswith((".html", ".js", ".css")):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 WEB = Path(__file__).resolve().parent / "web"
 
 
@@ -70,7 +82,7 @@ def records(frame):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "ai": ai_status()}
+    return {"status": "ok", "ai": ai_status(), "tracing": {"langfuse": tracing.enabled()}}
 
 
 @app.post("/runs")

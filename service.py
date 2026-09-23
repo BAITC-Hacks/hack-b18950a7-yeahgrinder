@@ -132,8 +132,8 @@ class ProcurementService:
             targets = targets[targets.code == sku]
         if targets.empty:
             raise ValueError("Товар/поставщик не найден")
-        if sku:
-            ds.items = targets.copy()
+        # No ds.items subsetting for one SKU: group seasonality is computed across the group's items,
+        # so a one-item dataset forecasts differently from the base run and the delta would be wrong.
         if extra_transit is not None:
             if type(extra_transit) is not int or extra_transit < 0:
                 raise ValueError("Дополнительный транзит должен быть целым и ≥0")
@@ -150,4 +150,6 @@ class ProcurementService:
         diff = base.orders[['supplier', 'sku', 'recommended_qty']].merge(
             candidate.orders[['supplier', 'sku', 'recommended_qty']], on=['supplier', 'sku'], suffixes=('_before', '_after'))
         diff['delta'] = diff.recommended_qty_after - diff.recommended_qty_before
+        if sku:
+            diff = diff[diff.sku == sku]  # callers (web UI) read changes[0] as this SKU's result
         return {'saved': False, 'summary': candidate.summary, 'changes': diff.to_dict('records')}

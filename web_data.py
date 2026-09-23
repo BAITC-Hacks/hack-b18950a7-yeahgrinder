@@ -1,4 +1,4 @@
-"""Данные для веб-интерфейса web/ (QadamSupply Аслана) из расчёта engine/.
+"""Данные для веб-интерфейса web/ (QadamSupply, фронт Аслана) из расчёта engine/.
 
 Форма товара совпадает с демо-набором web/mockDashboard.js, поэтому интерфейс работает на
 реальных данных без переделки. Все числа — из engine/run.py (тот же расчёт, что у API и агента).
@@ -121,6 +121,8 @@ def _products(res, growth, ds) -> list[dict]:
             "forecast_horizon": round(o["forecast_horizon"], 1), "safety_stock": round(o["safety_stock"], 1),
             "moq": o["moq"], "recommended_qty": o["recommended_qty"], "urgency": o["urgency"],
             "need": round(o["need"], 1), "order_value": o["order_value"],
+            # себестоимость единицы: сумма считается и по ручному количеству, и при рекомендации 0
+            "unit_cost": None if o["unit_cost"] is None or pd.isna(o["unit_cost"]) else float(o["unit_cost"]),
             "warnings": warnings or ["Данные полные, допущений нет."],
             "quality": "Нужна проверка" if codes & REVIEW else ("Есть допущения" if warnings else "Данные полные"),
             "reason_text": o["reason_text"], "excluded_events": excluded,

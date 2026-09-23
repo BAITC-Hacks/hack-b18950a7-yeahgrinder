@@ -23,7 +23,10 @@ def check_numbers(answer: str, tool_outputs: list[str], tolerance: float = 0.01)
     # Small counters (steps, «3 позиции») and SKU-code fragments are not claims about data.
     claims = [n for n in numbers(answer) if abs(n) > 10]
     unsupported = []
+    # Compare magnitudes: a delta of −2450 in the data is «на 2 450 меньше» in the answer.
+    known = [abs(k) for k in known]
     for n in claims:
-        if not any(abs(n - k) <= max(tolerance * abs(k), 0.5) or abs(n - round(k)) < 0.5 for k in known):
+        n = abs(n)
+        if not any(abs(n - k) <= max(tolerance * k, 0.5) or abs(n - round(k)) < 0.5 for k in known):
             unsupported.append(n)
     return unsupported

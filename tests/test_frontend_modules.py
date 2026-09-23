@@ -26,7 +26,7 @@ FRONTEND_ROOT = ROOT / "web" if (ROOT / "web").is_dir() else ROOT
 SHEET_NS = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 REL_NS = {"r": "http://schemas.openxmlformats.org/package/2006/relationships"}
 TYPE_NS = {"t": "http://schemas.openxmlformats.org/package/2006/content-types"}
-HEADERS = ["Код 1С", "Артикул", "Наименование", "Ед.", "Количество", "Поставщик", "Срочность"]
+HEADERS = ["Код 1С", "Артикул", "Наименование", "Ед.", "Количество", "Кратность", "Поставщик", "Срочность", "Обоснование"]
 
 
 @pytest.fixture(scope="module")
@@ -97,11 +97,11 @@ def sheet_rows(content):
     return [[cell_value(cell) for cell in row] for row in sheet.findall("s:sheetData/s:row", SHEET_NS)]
 
 
-def test_xlsx_has_seven_columns_and_preserves_supplied_order_quantities(run_js):
+def test_xlsx_has_nine_columns_and_preserves_supplied_order_quantities(run_js):
     # 37.5 is the manager's final value passed by the UI, independent of a recommendation.
     rows = [
-        ["0000123_", "A-01", "Товар с ручным количеством", "шт.", 37.5, "IEK", "Высокая"],
-        ["0000456_", "C-305", "Кабель", "м", 610, "Systeme Electric", "Критично"],
+        ["0000123_", "A-01", "Товар с ручным количеством", "шт.", 37.5, 1, "IEK", "Высокая", "Регулярный спрос ≈ 30 шт/мес"],
+        ["0000456_", "C-305", "Кабель", "м", 610, 305, "Systeme Electric", "Критично", "Бухта 305 м"],
     ]
     files = workbook_files(run_js, rows)
     assert set(files) == {
@@ -109,14 +109,14 @@ def test_xlsx_has_seven_columns_and_preserves_supplied_order_quantities(run_js):
         "xl/_rels/workbook.xml.rels", "xl/worksheets/sheet1.xml",
     }
     exported = sheet_rows(files["xl/worksheets/sheet1.xml"])
-    assert exported == [HEADERS, [*rows[0][:4], "37.5", *rows[0][5:]], [*rows[1][:4], "610", *rows[1][5:]]]
-    assert all(len(row) == 7 for row in exported)
+    assert exported == [HEADERS, [*rows[0][:4], "37.5", "1", *rows[0][6:]], [*rows[1][:4], "610", "305", *rows[1][6:]]]
+    assert all(len(row) == 9 for row in exported)
     sheet = ET.fromstring(files["xl/worksheets/sheet1.xml"])
     for ref, expected in (("E2", "37.5"), ("E3", "610")):
         cell = sheet.find(f".//s:c[@r='{ref}']", SHEET_NS)
         assert cell is not None and cell.get("t") is None
         assert cell.findtext("s:v", namespaces=SHEET_NS) == expected
-    assert sheet.find("s:autoFilter", SHEET_NS).get("ref") == "A1:G3"
+    assert sheet.find("s:autoFilter", SHEET_NS).get("ref") == "A1:I3"
     assert sheet.find("s:sheetViews/s:sheetView/s:pane", SHEET_NS).get("state") == "frozen"
 
 
@@ -124,10 +124,10 @@ def test_xlsx_escapes_text_and_keeps_formula_like_names_as_text(run_js):
     raw_name = '  Кабель & <щит> "двойной" \'одинарный\'\x00\x08\x0b\x0c\x0e\x1f  '
     cleaned_name = '  Кабель & <щит> "двойной" \'одинарный\'  '
     formula_like_article = '=HYPERLINK("https://example.invalid","текст")'
-    files = workbook_files(run_js, [["001_", formula_like_article, raw_name, "м", 15, "IEK", "Плановая"]])
+    files = workbook_files(run_js, [["001_", formula_like_article, raw_name, "м", 15, 1, "IEK", "Плановая", "Обоснование"]])
     sheet = ET.fromstring(files["xl/worksheets/sheet1.xml"])
     assert sheet_rows(files["xl/worksheets/sheet1.xml"])[1] == [
-        "001_", formula_like_article, cleaned_name, "м", "15", "IEK", "Плановая"
+        "001_", formula_like_article, cleaned_name, "м", "15", "1", "IEK", "Плановая", "Обоснование"
     ]
     article = sheet.find(".//s:c[@r='B2']", SHEET_NS)
     assert article.get("t") == "inlineStr"
