@@ -1,4 +1,4 @@
-# SupplyAI — frontend demo
+# QadamSupply — frontend demo
 
 Светлый интерфейс закупок с Liquid Glass на навигации. Без сборки и внешних CDN.
 
