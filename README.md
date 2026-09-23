@@ -15,6 +15,9 @@
   <img alt="расчёт" src="https://img.shields.io/badge/пересчёт-1.5_с-555">
 </p>
 
+<p align="center"><img src="docs/media/demo.gif" width="960" alt="QadamSupply за 40 секунд: сегодня → проверка на истории → разовая сделка LOOP → карточка с раскрытием → что если → админка"></p>
+<p align="center"><i>40 секунд без монтажа: «Сегодня» → проверка на истории → разовая сделка на 210 000 шт → карточка до накладной → «что если» → админка</i></p>
+
 ---
 
 ## Проблема за 20 секунд
@@ -145,6 +148,29 @@ Python + pandas, FastAPI, чистый JS без сборки, LangGraph-аге�
 4. «Проверено на истории»: 74%.
 5. Админка: правило «минимум 500» → заказ пересчитан.
 6. Черновик → ФИО → XLSX для 1С.
+
+## Для жюри: проверить за 5 минут
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+# архивы партнёра (IEK.zip, Systeme electric.zip) → data/raw/IEK/ и data/raw/SE/ (имена файлов не важны)
+.venv/bin/uvicorn api:app --port 8000        # http://127.0.0.1:8000, первый расчёт ~15 с
+.venv/bin/python scripts/test_project.py --iek-zip IEK.zip --se-zip "Systeme electric.zip"   # 77 тестов на реальных данных
+```
+
+Без архивов: `.venv/bin/python -m pytest -q` (70 тестов на синтетике) и интерфейс в демо-режиме —
+`python3 -m http.server -d web 8765`. Ключи AI не нужны: без них работает всё, кроме помощника.
+
+| Must-have кейса | Где в коде | Тест | Что увидеть в интерфейсе |
+|---|---|---|---|
+| 1. Все источники влияют на результат | `engine/calc.py` → `compute()` | `test_transit_reduces_order`, `test_stock_changes_order`, `test_category_changes_order`, `test_growth_plan_changes_order` | карточка → «Что если…»: +50 в пути → заказ 110 → 60 |
+| 2. Сезонность и рост | `engine/calc.py` → `_season_index`, тренд | `test_seasonality_peak`, `test_sustained_growth_is_not_cleaned` | карточка → строка «Прогноз на горизонт»: сен ×1,55, окт ×1,85 |
+| 3. Упущенный спрос при stockout | `engine/calc.py` → блок «дефицит» | `test_stockout_restores_demand` | `ярп40257`: апрель–май без товара → досчитано 58 и 65 шт |
+| 4. Разовые крупные заказы | `engine/calc.py` → `detect_oneoffs` | `test_one_off_spike_ignored`, `test_regular_bulk_buyer_is_not_one_off` | `130200305_` «Петля LOOP»: 210 000 шт исключены, видны на графике |
+| 5. Список по поставщикам с обоснованием | `engine/run.py` → `OrderLine.reason_text` | `test_every_line_explained_and_grouped` | вкладки ИЭК / SE, у каждой строки обоснование до накладной |
+
+Ограничения кейса: отправки поставщику нет (утверждает человек, с ФИО); клиентов в данных нет, разовые
+сделки определяются по накладной. Методология и алгоритм выбросов — в технической части ниже.
 
 ## Команда
 
