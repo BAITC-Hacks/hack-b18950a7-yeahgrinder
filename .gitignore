@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+
+# данные партнёра — не коммитим
+IEK.zip
+data/raw/
+data/cache/
