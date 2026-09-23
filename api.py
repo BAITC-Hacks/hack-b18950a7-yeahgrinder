@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from agent.graph import AgentUnavailable, ask, explain_run
+from agent import tracing
 from agent.providers import status as ai_status
 from engine.load import DataError
 from engine.models import Params, Supplier, Urgency
@@ -70,7 +71,7 @@ def records(frame):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "ai": ai_status()}
+    return {"status": "ok", "ai": ai_status(), "tracing": {"langfuse": tracing.enabled()}}
 
 
 @app.post("/runs")
