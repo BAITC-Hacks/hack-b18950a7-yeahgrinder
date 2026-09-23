@@ -7,3 +7,11 @@ __pycache__/
 IEK.zip
 data/raw/
 data/cache/
+data/processed/
+runs/
+*.sqlite*
+*.xlsx
+*.zip
+.env.*
+!.env.example
+.pytest_cache/

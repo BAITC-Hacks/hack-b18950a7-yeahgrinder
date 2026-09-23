@@ -28,8 +28,8 @@ Python + **Streamlit**. Твои файлы — `app.py` и папка `ui/` (е
 ## Как получать данные
 
 ```python
-from engine.load import load, DataError
-from engine.calc import Params, compute
+from engine.compat import load, DataError
+from engine.compat import Params, compute
 
 ds = load()                  # ~0.3 с из кеша; при отсутствии данных — DataError с текстом для человека
 res = compute(ds, Params())  # ~1 с на все товары

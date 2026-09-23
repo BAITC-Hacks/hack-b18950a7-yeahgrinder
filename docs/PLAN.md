@@ -48,8 +48,8 @@ B и C могут начинать сразу, не дожидаясь гото�
 заглушки с такими же колонками.
 
 ```python
-from engine.load import load
-from engine.calc import Params, compute
+from engine.compat import load
+from engine.compat import Params, compute
 
 ds = load()                      # читает data/raw/IEK/ (распаковать IEK.zip туда)
 res = compute(ds, Params())      # ~секунды на все товары

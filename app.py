@@ -5,8 +5,8 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from engine.calc import Params, compute
-from engine.load import DataError, load
+from engine.compat import Params, compute
+from engine.compat import DataError, load
 
 st.set_page_config(page_title="Заказы поставщикам", layout="wide")
 
