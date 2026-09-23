@@ -50,3 +50,55 @@ body:has(dialog[open]){overflow:hidden}dialog{color:#263b55;border:1px solid #e3
 .text-input{width:100%;margin-top:6px;border:1px solid #dfe6ef;border-radius:10px;padding:10px 12px;font:inherit;font-size:13px;background:#fff;color:#23344b}
 .text-input:focus{outline:2px solid #bcd3fb;border-color:#8fb4f5}
 .detail-tile small{display:block;font-size:11px;color:#8a98ab;margin-top:4px;font-weight:400}
+
+/* --- дизайн: KPI поставщиков, компактно --- */
+.supplier-kpi{padding:18px 18px 16px}
+.supplier-kpi-head{display:flex;align-items:center;gap:12px}
+.supplier-kpi-title{min-width:0;flex:1}
+.supplier-kpi-title .card-sub{margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.supplier-value{text-align:right;padding:6px 12px;border-radius:12px;background:#eef8f2;border:1px solid #d7efe1;flex:0 0 auto}
+.supplier-value small{display:block;font-size:11px;color:#4f8a6c}
+.supplier-value strong{display:block;font-size:17px;font-weight:650;color:#1f6b47;letter-spacing:-.3px}
+.supplier-kpi .kpi-grid{grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:14px}
+.kpi{padding:11px 12px 10px}
+.kpi strong{font-size:24px;margin:4px 0 2px}
+.kpi small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kpi.warn strong{color:#c97819}
+.kpi.alert{background:#fff5f4;border-color:#f6d3cf}
+.kpi.alert strong{color:#c5413d}
+.kpi.alert:hover{background:#ffeceb;border-color:#efb8b1}
+.kpi.calm strong{color:#5b56c9}
+.kpi-note{display:flex;gap:7px;align-items:flex-start;margin-top:10px;font-size:11px;line-height:1.5;color:#8a7a5a}
+.kpi-note svg{width:14px;flex:0 0 auto;margin-top:1px;color:#c49a4e}
+/* --- таблица: запас --- */
+.cover-none{color:#c5413d;font-weight:600}
+.cover-low{color:#c97819;font-weight:600}
+.muted{color:#9aa6b6}
+/* --- карточка: обоснование списком --- */
+.reason-list{margin:14px 0 16px;padding:0;list-style:none;display:grid;gap:7px}
+.reason-list li{position:relative;padding:9px 12px 9px 30px;border-radius:11px;background:#f8fafc;border:1px solid #edf1f6;font-size:12.5px;line-height:1.55;color:#4a5b72}
+.reason-list li:before{content:'';position:absolute;left:13px;top:15px;width:6px;height:6px;border-radius:50%;background:#7aa5ee}
+@media (max-width:760px){
+ .supplier-kpi .kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .supplier-kpi-head{flex-wrap:wrap}
+ .supplier-value{text-align:left;width:100%}
+ .supplier-kpi-title .card-sub{white-space:normal}
+}
+.kpi small{white-space:normal;overflow:visible}
+
+/* --- «что если» и помощник --- */
+.whatif summary{font-weight:600;color:#2869c9}
+.whatif-form{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-top:10px}
+.whatif-form label{display:grid;gap:5px;font-size:12px;color:#66758a}
+.whatif-form input{width:130px;border:1px solid #dfe6ef;border-radius:9px;padding:8px 10px;font:inherit;font-size:13px}
+.whatif-result{margin-top:10px;font-size:13px;color:#3d4d63}
+.delta-down{color:#2f8a5c;font-weight:600}
+.ask{display:grid;gap:12px}
+.ask-suggest{display:flex;flex-wrap:wrap;gap:8px}
+.ask-suggest .chip{white-space:normal;text-align:left;line-height:1.4}
+.ask textarea{width:100%;min-height:84px;border:1px solid #dfe6ef;border-radius:12px;padding:10px 12px;font:inherit;font-size:13px;resize:vertical}
+.ask-actions{display:flex;justify-content:flex-end}
+.ask-answer{border:1px solid #e3eaf3;border-radius:14px;background:#fbfcfe;padding:12px 14px}
+.ask-check{font-size:12px;font-weight:600;margin-bottom:8px}
+.ask-check.ok{color:#2f8a5c}.ask-check.warn{color:#c97819}
+.ask-text{font-size:13px;line-height:1.6;color:#33445b}
