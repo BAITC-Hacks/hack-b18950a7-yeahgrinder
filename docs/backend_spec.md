@@ -1,4 +1,4 @@
-# Procurement Copilot — Backend Spec v2
+# QadamSupply — Backend Spec v2
 
 > Кейс «Электрокомплект»: автоматический расчёт заказов поставщикам (IEK, Systeme Electric).
 > v2 переписана под **реальные файлы** (проверено 23.09.2026): 6 xlsx на поставщика, склад один — Алматы.
@@ -412,7 +412,7 @@ fastapi uvicorn # nice
 ### 14.1 Разделение ролей
 
 ```text
-                    Procurement Copilot
+                    QadamSupply
                             |
                         LangGraph
                             |

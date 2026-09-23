@@ -1,4 +1,4 @@
-# Procurement Copilot — автоматический расчёт заказов поставщикам
+# QadamSupply — автоматический расчёт заказов поставщикам
 
 Кейс ТОО «Электрокомплект» (HackAlem AI). Сервис по истории продаж, остаткам и товарам в пути
 рассчитывает рекомендованные заказы поставщикам IEK и Systeme Electric для склада Алматы,
@@ -20,7 +20,7 @@ NVIDIA (опц.)    независимая проверка ответов ча�
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 cp .env.example .env          # ключи AI — по желанию
-.venv/bin/uvicorn api:app --port 8000      # HTTP API (/docs) и интерфейс SupplyAI из web/ на http://127.0.0.1:8000
+.venv/bin/uvicorn api:app --port 8000      # HTTP API (/docs) и интерфейс QadamSupply из web/ на http://127.0.0.1:8000
 .venv/bin/streamlit run app.py              # запасной интерфейс для аналитика
 .venv/bin/python -m pytest -q               # тесты
 ```
@@ -177,7 +177,7 @@ LangGraph: модель ⇄ инструменты, не больше 6 шаго
 ## Структура
 
 ```text
-web/              интерфейс SupplyAI (JS, без сборки) — данные из /ui/data
+web/              интерфейс QadamSupply (JS, без сборки) — данные из /ui/data
 web_data.py       адаптер расчёта для web/
 app.py            запасной Streamlit-интерфейс
 api.py            FastAPI: API сервиса + страница web/

@@ -2,15 +2,15 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#f4f6f8"><meta name="description" content="Демонстрационный обзор запасов и рекомендаций SupplyAI.">
-<title>SupplyAI — Обзор закупок</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='12' fill='%233b82f6'/%3E%3Cpath d='M11 27V13h4l5 7 5-7h4v14h-4v-8l-5 6-5-6v8z' fill='white'/%3E%3C/svg%3E">
+<meta name="theme-color" content="#f4f6f8"><meta name="description" content="Демонстрационный обзор запасов и рекомендаций QadamSupply.">
+<title>QadamSupply — Обзор закупок</title>
+<link rel="icon" type="image/png" href="./assets/favicon.png"><link rel="apple-touch-icon" href="./assets/logo.png">
 <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
 <div class="app"><aside class="sidebar glass" aria-label="Главная навигация">
-  <div class="brand"><span class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M4 18V6h3l5 7 5-7h3v12h-3v-7l-5 6-5-6v7z"/></svg></span>SupplyAI</div>
-  <nav class="nav"><button class="active" data-nav="Обзор"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="5" rx="2"/><rect x="13" y="10" width="8" height="11" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/></svg>Обзор</button><button data-nav="Закупки"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16l-1.5 13h-13zM9 7a3 3 0 0 1 6 0"/><path d="M8 11h.01M16 11h.01"/></svg>Закупки</button><button data-nav="Товары"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/></svg>Товары</button><button data-nav="Данные"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>Данные</button></nav>
+  <div class="brand"><img class="brand-logo" src="./assets/logo.png" alt="" width="34" height="34">QadamSupply</div>
+  <nav class="nav"><button class="active" data-nav="Сегодня"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c3.9 0 7-2.9 7-6.8 0-2.8-1.6-4.9-3.1-6.8-.6 1.6-1.6 2.6-2.9 2.9.3-3.2-.9-6.2-3.6-8.3.1 3.6-3.4 5.9-3.4 11.4C6 19 8.4 22 12 22Z"/></svg>Сегодня</button><button data-nav="Обзор"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="5" rx="2"/><rect x="13" y="10" width="8" height="11" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/></svg>Обзор</button><button data-nav="Закупки"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16l-1.5 13h-13zM9 7a3 3 0 0 1 6 0"/><path d="M8 11h.01M16 11h.01"/></svg>Закупки</button><button data-nav="Товары"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/></svg>Товары</button><button data-nav="Данные"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>Данные</button></nav>
   <div class="sidebar-bottom"><div class="sidebar-note">Ваш следующий заказ,<br>с понятным обоснованием</div><button class="settings" data-action="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="m19.4 15 .1.1 1.4 1.1-1.4 2.4-1.7-.6a8 8 0 0 1-1.5.9l-.3 1.8h-2.8l-.3-1.8a8 8 0 0 1-1.5-.9l-1.7.6-1.4-2.4 1.4-1.1a8 8 0 0 1 0-1.8l-1.4-1.1 1.4-2.4 1.7.6a8 8 0 0 1 1.5-.9l.3-1.8h2.8l.3 1.8a8 8 0 0 1 1.5.9l1.7-.6 1.4 2.4-1.4 1.1a8 8 0 0 1 0 1.7z" transform="translate(-1 -1)"/></svg>Настройки</button></div>
 </aside><main class="main">
 <div class="toolbar glass">
@@ -18,7 +18,7 @@
   <div class="toolbar-right"><span class="mode-pill"><i></i>Демо-режим</span><span class="toolbar-divider"></span><div class="avatar" aria-label="Демонстрационный профиль">МЗ</div><div class="user"><strong>Менеджер закупок</strong><small>Электрокомплект</small></div></div>
 </div>
 <div id="page"></div>
-<footer class="footer-note">SupplyAI · Демонстрационные данные на 22 сентября 2026 · Изменения сохраняются только в этом браузере</footer>
+<button class="assistant-fab" data-action="assistant-open" aria-label="Спросить ИИ-помощника"><span class="ai-badge">ИИ</span> Спросить</button><footer class="footer-note">QadamSupply · Демонстрационные данные на 22 сентября 2026 · Изменения сохраняются только в этом браузере</footer>
 </main></div>
 <dialog id="product-dialog" class="drawer" aria-label="Карточка товара"></dialog>
 <dialog id="confirm-dialog" class="modal" aria-label="Подтверждение заказа"></dialog>

@@ -31,7 +31,7 @@ function readSaved() {
   return {version:demo.version,edits:{},draft:[],rejected:[],approved:null,scenario:'base'};
 }
 const saved=readSaved();
-const state={page:'Обзор',tab:'recommendations',query:'',supplier:'Все',category:'Все',risk:'Все',transit:'Все',oneoff:'Все',abc:'Все',selected:new Set(),productId:null,detailTab:'recommendation',chartId:'iek-1',showSpike:false};
+const state={page:'Сегодня',review:false,restored:false,tab:'recommendations',query:'',supplier:'Все',category:'Все',risk:'Все',transit:'Все',oneoff:'Все',abc:'Все',selected:new Set(),productId:null,detailTab:'recommendation',chartId:'iek-1',showSpike:false};
 let allProducts=[], sources=[];
 function persist(){try{localStorage.setItem(storageKey,JSON.stringify(saved));}catch{storageFailed=true; toast('Сохранение недоступно. Правки останутся только до закрытия страницы.');}}
 function invalidate(){saved.approved=null;}
@@ -40,13 +40,13 @@ function find(id){return products().find(p=>p.id===id);}
 function quantity(p){return saved.edits[p.id]?.qty ?? p.recommended_qty;}
 function changed(p){return quantity(p)!==p.recommended_qty;}
 function comment(p){return saved.edits[p.id]?.comment||'';}
-function filtered(){const q=state.query.trim().toLocaleLowerCase('ru');return products().filter(p=>(state.supplier==='Все'||p.supplier===state.supplier)&&(state.category==='Все'||p.category===state.category)&&(state.transit==='Все'||(state.transit==='Есть'?p.in_transit_in_horizon>0:!p.in_transit_in_horizon))&&(state.oneoff==='Все'||(p.excluded_events?.length>0))&&(state.abc==='Все'||p.abc===state.abc)&&(!q||`${p.name} ${p.article} ${p.sku} ${p.supplier}`.toLocaleLowerCase('ru').includes(q)));}
+function filtered(){const q=state.query.trim().toLocaleLowerCase('ru');return products().filter(p=>(state.supplier==='Все'||p.supplier===state.supplier)&&(state.category==='Все'||p.category===state.category)&&(state.transit==='Все'||(state.transit==='Есть'?p.in_transit_in_horizon>0:!p.in_transit_in_horizon))&&(state.oneoff==='Все'||(p.excluded_events?.length>0))&&(state.abc==='Все'||p.abc===state.abc)&&(!state.review||needsReview(p))&&(!state.restored||p.lost_qty>0)&&(!q||`${p.name} ${p.article} ${p.sku} ${p.supplier}`.toLocaleLowerCase('ru').includes(q)));}
 function toast(message){$('#toast').textContent=message;$('#toast').classList.add('show');clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('#toast').classList.remove('show'),3500);}
-function navigate(page,tab='recommendations'){state.page=page;state.tab=tab;state.query='';state.supplier='Все';state.category='Все';state.risk='Все';state.selected.clear();render();window.scrollTo({top:0,behavior:'instant'});}
+function navigate(page,tab='recommendations'){state.page=page;state.tab=tab;state.query='';state.supplier='Все';state.category='Все';state.risk='Все';state.transit='Все';state.oneoff='Все';state.abc='Все';state.review=false;state.restored=false;state.selected.clear();render();window.scrollTo({top:0,behavior:'instant'});}
 function header(title,description,actions=''){return `<header class="header"><div><div class="eyebrow">ПЛАНИРОВАНИЕ ЗАПАСОВ / ${saved.scenario==='growth'?'СЦЕНАРИЙ +20%':'22 СЕНТЯБРЯ 2026'}</div><h1>${title}</h1><p>${description}</p></div><div class="header-actions">${actions}</div></header>`;}
 const btn = (text,action,kind='',extra='')=>`<button class="btn ${kind}" data-action="${action}" ${extra}>${text}</button>`;
 function empty(title,description,action=''){return `<div class="empty"><div class="empty-icon">${icon('box')}</div><h2>${title}</h2><p>${description}</p>${action}</div>`;}
-function filterBar(category=true){return `<div class="filters"><label class="filter-search">${icon('search')}<input id="list-search" aria-label="Поиск по товару, коду или артикулу" placeholder="Товар, код 1С или артикул" value="${esc(state.query)}"></label><select id="supplier-filter" aria-label="Поставщик"><option value="Все">Все поставщики</option>${suppliers.map(s=>`<option ${state.supplier===s?'selected':''}>${s}</option>`).join('')}</select>${category?`<select id="category-filter" aria-label="Категория"><option value="Все">Все категории</option>${[...new Set(allProducts.map(p=>p.category))].map(c=>`<option ${state.category===c?'selected':''}>${c}</option>`).join('')}</select>`:''}${extraFilters()}${state.query||state.supplier!=='Все'||state.category!=='Все'||state.transit!=='Все'||state.oneoff!=='Все'||state.abc!=='Все'?btn('Сбросить','clear-filters','text'):''}</div>`;}
+function filterBar(category=true){return `<div class="filters"><label class="filter-search">${icon('search')}<input id="list-search" aria-label="Поиск по товару, коду или артикулу" placeholder="Товар, код 1С или артикул" value="${esc(state.query)}"></label><select id="supplier-filter" aria-label="Поставщик"><option value="Все">Все поставщики</option>${suppliers.map(s=>`<option ${state.supplier===s?'selected':''}>${s}</option>`).join('')}</select>${category?`<select id="category-filter" aria-label="Категория"><option value="Все">Все категории</option>${[...new Set(allProducts.map(p=>p.category))].map(c=>`<option ${state.category===c?'selected':''}>${c}</option>`).join('')}</select>`:''}${extraFilters()}${state.review?btn('На проверку ✕','clear-review','chip active'):''}${state.restored?btn('Досчитан спрос ✕','clear-restored','chip active'):''}${state.query||state.supplier!=='Все'||state.category!=='Все'||state.transit!=='Все'||state.oneoff!=='Все'||state.abc!=='Все'||state.review||state.restored?btn('Сбросить','clear-filters','text'):''}</div>`;}
 
 function extraFilters(){
  const abcs=[...new Set(allProducts.map(p=>p.abc).filter(Boolean))].sort();
@@ -93,6 +93,51 @@ function supplierKpis(ps){
   return `<article class="card supplier-kpi"><div class="supplier-kpi-head"><div class="supplier-logo ${i?'se':''}">${i?'SE':'IEK'}</div><div class="supplier-kpi-title"><h2>${s}</h2><div class="card-sub">${fmt(rows.length)} товаров · поставка ${esc(demo.leadText?.[s]||(i?'45 дней · допущение':'24–30 дней · демо-срок'))}</div></div>${value?`<div class="supplier-value" title="${esc(KPI_TIPS.value)}"><small>Сумма заказа</small><strong>${money(value)}</strong></div>`:''}</div><div class="kpi-grid">${tiles.map(([label,v,hint,tip,action,tone])=>`<button class="kpi ${tone}" data-action="${action}" data-supplier="${s}" title="${esc(KPI_TIPS[tip])}"><span>${label}</span><strong>${fmt(v)}</strong><small>${hint}</small></button>`).join('')}</div>${estimated?`<div class="kpi-note">${icon('info')}<span>${estimated===rows.length?`Остаток всех товаров ${i?'поставщика':'ИЭК'}`:`Остаток ${fmt(estimated)} ${estimated%10===1&&estimated%100!==11?'товара':'товаров'}`} — оценка: приходы за сентябрь в выгрузке не видны. Сверьте с 1С перед заказом.</span></div>`:''}</article>`;}).join('');
  return cards?`<section class="supplier-kpis" aria-label="Показатели по поставщикам">${cards}</section>`:'';
 }
+
+// --- «Что делать сегодня?»: стартовый экран — список дел вместо сухих цифр
+const IMPORTANCE={'1':0,'A':0,'2':1,'B':1,'5':1,'3':2,'C':2,'7':3};
+const rankOf=p=>IMPORTANCE[p.abc]??3;
+const needsReview=p=>p.recommended_qty>0&&(p.warnings||[]).some(w=>w.startsWith('Округление')||w.startsWith('Заказ заметно'));
+const supplierName=s=>s==='IEK'?'ИЭК':s;
+function todayTasks(){
+ const ps=products(), hasAbc=ps.some(p=>p.abc);
+ const order=(a,b)=>rankOf(a)-rankOf(b)||(a.cover_days??0)-(b.cover_days??0)||(b.order_value||0)-(a.order_value||0)||quantity(b)-quantity(a);
+ const orders=suppliers.map(s=>{
+  const bare=ps.filter(p=>p.supplier===s&&p.urgency==='CRITICAL'&&!p.in_transit_in_horizon&&quantity(p)>0&&!saved.rejected.includes(p.id)).sort(order);
+  const important=hasAbc?bare.filter(p=>rankOf(p)===0):bare;
+  const items=important.length?important:bare;
+  return {key:`order-${s}`,supplier:s,items,rest:bare.length-items.length,important:hasAbc&&important.length>0};
+ }).filter(t=>t.items.length);
+ return {orders,review:ps.filter(needsReview).sort(order),coming:ps.filter(p=>p.urgency==='CRITICAL'&&p.in_transit_in_horizon>0).sort(order),ps};
+}
+function todayItem(p){return `<button class="today-item" data-action="product" data-id="${p.id}"><span class="ti-name">${esc(p.name)}<small>${esc(p.article)}</small></span><span class="ti-stock">${coverCell(p)}</span><span class="ti-qty">${unit(quantity(p),p)}</span></button>`;}
+function orderTask(t,n){
+ const done=t.items.every(p=>saved.draft.includes(p.id)), value=t.items.reduce((a,p)=>a+(p.order_value||0),0);
+ const imp=t.important?(t.supplier==='IEK'?' категории A':' категории 1'):'';
+ return `<article class="today-card fire ${done?'done':''}"><div class="today-card-head"><span class="today-step">${done?icon('check'):n}</span><div><div class="today-tag">🔥 Сегодня</div><h2>Заказать у ${esc(supplierName(t.supplier))}</h2><p><strong>${positions(t.items.length)}${imp}</strong> закончатся раньше, чем придёт новая поставка, а по ним ничего не едет.${value?` Сумма ≈ <strong>${money(value)}</strong>.`:''}</p></div></div><div class="today-items">${t.items.slice(0,5).map(todayItem).join('')}${t.items.length>5?`<button class="today-more" data-action="today-open" data-supplier="${esc(t.supplier)}" data-important="${t.important?'1':''}">и ещё ${positions(t.items.length-5)} ${icon('arrow')}</button>`:''}</div><div class="today-actions">${done?`<span class="today-done">${icon('check')} Все в черновике</span>${btn('Открыть черновик','open-draft','small')}`:btn(icon('plus')+` Добавить ${fmt(t.items.length)} в черновик`,'today-add','primary',`data-task="${esc(t.key)}"`)+btn('Списком','today-open','small',`data-supplier="${esc(t.supplier)}" data-important="${t.important?'1':''}"`)}</div>${t.rest>0?`<div class="today-later">${icon('info')}<span>Ещё ${positions(t.rest)} менее важных тоже без поставки — можно заказать на этой неделе.</span><button class="link-btn" data-action="today-open" data-supplier="${esc(t.supplier)}">Показать</button></div>`:''}</article>`;
+}
+function smallTask(kind,tag,n,title,text,items,action,label){
+ return `<article class="today-card ${kind}"><div class="today-card-head"><span class="today-step">${n}</span><div><div class="today-tag">${tag}</div><h2>${title}</h2><p>${text}</p></div></div>${items.length?`<div class="today-items">${items.slice(0,3).map(todayItem).join('')}</div>`:''}<div class="today-actions">${btn(label,action,kind==='warn'?'primary':'small')}</div></article>`;
+}
+function dateLabel(){const d=demo.asOf?new Date(demo.asOf+'T12:00:00'):new Date();return `${d.toLocaleDateString('ru-RU',{day:'numeric',month:'long'})} · ${demo.live?'выгрузка 1С':'демо-данные'}`;}
+function today(){
+ const {orders,review,coming,ps}=todayTasks();
+ const draftRows=saved.draft.map(find).filter(p=>p&&quantity(p)>0);
+ const h=new Date().getHours(), hello=h<12?'Доброе утро':h<18?'Добрый день':'Добрый вечер';
+ const done=orders.filter(t=>t.items.every(p=>saved.draft.includes(p.id))).length;
+ const oneoff=ps.filter(p=>p.excluded_events?.length).length, restored=ps.filter(p=>p.lost_qty>0).length;
+ const loop=ps.find(p=>p.sku==='130200305_')||ps.find(p=>p.excluded_events?.length);
+ let n=orders.length;
+ const hero=`<section class="today-hero"><div><div class="eyebrow">${esc(dateLabel())}</div><h1>${hello}! Что делать сегодня 🔥</h1><p>Из ${fmt(ps.length)} товаров отобрали то, что требует решения сегодня. Начните сверху — остальное подождёт.</p></div>${orders.length?`<button class="today-progress" data-action="open-draft" title="Открыть черновик"><strong>${done} из ${orders.length}</strong><span>срочных заказов собрано</span><div class="bar"><i style="width:${done/orders.length*100}%"></i></div></button>`:''}</section>${aiBriefBlock()}`;
+ const fire=orders.length?`<section class="today-fire">${orders.map((t,i)=>orderTask(t,i+1)).join('')}</section>`:`<div class="notice info"><div>${icon('check')}</div><div><strong>Срочных заказов нет</strong>По всем критичным позициям уже едет поставка.</div></div>`;
+ const side=[
+  review.length?smallTask('warn','⚠️ Проверить',++n,'Проверить перед заказом',`<strong>${positions(review.length)}</strong>: кратность сильно увеличила заказ или он заметно больше обычных продаж. Посмотрите и поправьте количество.`,review,'today-review','Разобрать список'):'',
+  coming.length?smallTask('info','🚚 Проследить',++n,'Проследить за поставками',`<strong>${positions(coming.length)}</strong> в критичном запасе, но поставка уже едет. Проверьте, что приход не задержится.`,coming,'today-coming','Посмотреть'):'',
+  `<article class="today-card ok"><div class="today-card-head"><span class="today-step">${icon('check')}</span><div><div class="today-tag">✅ Уже сделано за вас</div><h2>Расчёт готов</h2></div></div><ul class="today-checks"><li><button class="check-link" data-action="catalog">Пересчитали <strong>${fmt(ps.length)}</strong> товаров по данным на ${esc(dateLabel().split(' · ')[0])}</button></li>${oneoff?`<li><button class="check-link" data-action="oneoff">Исключили разовые сделки у <strong>${fmt(oneoff)}</strong> товаров — они не раздувают заказ</button></li>`:''}${restored?`<li><button class="check-link" data-action="today-restored">Досчитали спрос у <strong>${fmt(restored)}</strong> товаров за месяцы без остатка</button></li>`:''}</ul><div class="today-actions">${loop?btn('Пример: разовая сделка','today-example','small',`data-id="${esc(loop.id)}"`):''}${btn('Весь обзор','go-overview','small')}</div></article>`,
+ ].join('');
+ const bar=draftRows.length?`<div class="today-draftbar glass"><span>${icon('bag')} В черновике <strong>${positions(draftRows.length)}</strong></span>${btn('Перейти к утверждению '+icon('arrow'),'open-draft','primary')}</div>`:'';
+ return hero+fire+`<section class="today-side">${side}</section>`+bar;
+}
 function overview(){
  const ps=products(), counts=Object.fromEntries(Object.keys(urgency).map(k=>[k,ps.filter(p=>p.urgency===k).length]));
  const needs=ps.filter(p=>p.recommended_qty>0), critical=counts.CRITICAL, transit=ps.filter(p=>p.in_transit_in_horizon>0).length;
@@ -132,8 +177,9 @@ function render(){
  const focus=document.activeElement, selection=focus?.id==='list-search'?focus.selectionStart:null;
  $('#crumb').textContent=state.page;
  document.querySelectorAll('[data-nav]').forEach(b=>{b.classList.toggle('active',b.dataset.nav===state.page);b.setAttribute('aria-current',b.dataset.nav===state.page?'page':'false');b.title=b.dataset.nav;});
- $('#page').innerHTML=state.page==='Обзор'?overview():state.page==='Закупки'?purchases():state.page==='Товары'?catalog():dataPage();
- if(demo.live&&!render.labelled){render.labelled=true;const pill=document.querySelector('.mode-pill');if(pill)pill.lastChild.textContent='Данные 1С';const foot=document.querySelector('.footer-note');if(foot)foot.textContent=`SupplyAI · выгрузка 1С на ${demo.asOf.split('-').reverse().join('.')} · Изменения сохраняются только в этом браузере`;}
+ $('#page').innerHTML=state.page==='Сегодня'?today():state.page==='Обзор'?overview():state.page==='Закупки'?purchases():state.page==='Товары'?catalog():dataPage();
+ if(demo.live&&!render.labelled){render.labelled=true;const pill=document.querySelector('.mode-pill');if(pill)pill.lastChild.textContent='Данные 1С';const foot=document.querySelector('.footer-note');if(foot)foot.textContent=`QadamSupply · выгрузка 1С на ${demo.asOf.split('-').reverse().join('.')} · Изменения сохраняются только в этом браузере`;}
+ document.body.classList.toggle('has-draftbar',!!document.querySelector('.today-draftbar'));
  if(!demo.live&&allProducts.length)$('#page').insertAdjacentHTML('afterbegin',`<div class="notice">Демо-данные: API расчёта недоступен (${esc(demo.liveError||'нет ответа')}). Запустите сервер: .venv/bin/uvicorn api:app</div>`);
  if(storageFailed)$('#page').insertAdjacentHTML('afterbegin','<div class="notice">Локальное сохранение недоступно. Правки сохраняются только в текущем сеансе.</div>');
  if(selection!==null){$('#list-search')?.focus();$('#list-search')?.setSelectionRange(selection,selection);}
@@ -143,7 +189,7 @@ function detailsBody(p){
  if(state.detailTab==='history')return `<div class="card-sub">${p.history_label||(p.id==='iek-loop'?'Архивный демо-кейс · апрель — ноябрь 2025':'Демо · апрель — ноябрь 2026; сентябрь — неполный месяц')} · ${p.unit}<br>График базового сценария</div>${chart(p,{detail:true,spike:state.showSpike})}${p.excluded_events.map(e=>`<div class="event-card"><strong>Разовая крупная продажа скорректирована</strong><br>${e.date} · накладная ${e.doc}<br>Продажа: <strong>${unit(e.qty,p)}</strong> → учтено ${unit(e.threshold,p)}<br>Из регулярного спроса исключено ${unit(e.excess,p)}</div>`).join('')}${p.lost_qty?`<div class="notice"><div>${icon('info')}</div><div><strong>Восстановлен упущенный спрос</strong>${p.restored_text?p.restored_text+'<br>':'Июль: факт 4 шт. → скорректированный спрос 52 шт.<br>'}Восстановлено ${unit(p.lost_qty,p)} из-за отсутствия товара.</div></div>`:''}<details class="disclosure"><summary>Посмотреть значения по месяцам</summary><table class="history-table"><thead><tr><th>Месяц</th><th class="num">Факт</th><th class="num">Скорр.</th><th class="num">Прогноз</th></tr></thead><tbody>${p.history.map(s=>`<tr><td>${s.month}</td><td class="num">${s.raw===null?'—':fmt(s.raw)}</td><td class="num">${s.clean===null?'—':fmt(s.clean)}</td><td class="num">${s.forecast===null?'—':fmt(s.forecast)}</td></tr>`).join('')}</tbody></table></details>`;
  if(state.detailTab==='data')return `<div class="notice"><div>${icon('alert')}</div><div><strong>${p.quality}</strong>${p.warnings.map(esc).join('<br>')}</div></div><div class="details-grid"><div class="detail-tile">Код 1С<strong>${p.sku}</strong></div><div class="detail-tile">Единица измерения<strong>${p.unit}</strong></div><div class="detail-tile">Срок поставки<strong>${p.lead_time_days} дней</strong></div><div class="detail-tile">Кратность заказа<strong>${unit(p.moq,p)}</strong></div></div><p class="reason">Все значения этой карточки заданы в демо-наборе. Они не являются результатом обработки реальных файлов.</p><details class="disclosure" open><summary>Источники и актуальность</summary><p>${demo.live?`Продажи и транзит: выгрузка 1С на ${demo.asOf.split('-').reverse().join('.')}.<br>${p.warnings.map(esc).join('<br>')}`:`Продажи и транзит: демо-снимок на 22.09.2026.<br>Остатки: демонстрационная оценка.<br>${p.id==='iek-loop'?'График LOOP показывает отдельный архивный кейс 2025 года.':''}`}</p></details>`;
  const rounded=Math.max(0,p.need);
- return `<div class="recommendation-hero"><div class="label">Рекомендуем ${p.recommended_qty?'заказать':'сохранить текущий запас'}</div><div class="value">${fmt(p.recommended_qty)} <span>${p.unit}</span></div><p>${p.recommended_qty?`На горизонт ${days(p.horizon_days??demo.horizon)} · кратность ${unit(p.moq,p)}`:'Дополнительный заказ не требуется'}${saved.scenario==='growth'?' · сценарий +20%':''}</p></div><div class="section-label">Почему именно столько</div><div class="breakdown">${[['Прогноз на горизонт',p.forecast_horizon,''],['Страховой запас',p.safety_stock,'+'],['Текущий остаток',p.stock_current,'−'],['Товар в пути',p.in_transit_in_horizon,'−']].map(([label,n,sign])=>`<div class="breakdown-row"><span>${label}</span><strong>${sign} ${unit(n,p)}</strong></div>`).join('')}<div class="breakdown-row"><span>Потребность до округления</span><strong>${unit(rounded,p)}</strong></div><div class="breakdown-row total"><span>${p.need<=0?'Запаса достаточно':'С учётом кратности'}</span><strong>${unit(p.recommended_qty,p)}</strong></div></div>${reasonList(p)}<div class="details-grid"><div class="detail-tile">Запаса хватит<strong>${days(p.cover_days)}</strong></div><div class="detail-tile">Срок поставки<strong>${days(p.lead_time_days)}</strong>${leadSource(p)}</div>${p.horizon_days?`<div class="detail-tile">Горизонт расчёта<strong>${days(p.horizon_days)}</strong><small>срок поставки + ${demo.reviewDays} дн. до следующего заказа</small></div>`:''}${p.abc?`<div class="detail-tile">Категория важности<strong>${esc(p.abc)}</strong><small>${abcHint(p.abc)}</small></div>`:''}</div>${whatIfBlock(p)}${saved.scenario==='growth'?'<div class="notice info">Срочность, покрытие и графики показаны для базового сценария. '+(demo.live?'Количество +20% пересчитано движком.':'Количество +20% задано заранее.')+'</div>':''}<details class="disclosure"><summary>${p.quality} · посмотреть оговорки</summary><p>${p.warnings.map(esc).join('<br>')}</p></details><div class="edit-form"><label for="detail-qty">Ваше количество к заказу</label><div class="qty"><input id="detail-qty" type="number" min="0" step="1" value="${quantity(p)}">${p.unit}</div><div class="field-hint">Рекомендация ${unit(p.recommended_qty,p)} останется видимой. Кратность: ${unit(p.moq,p)}</div><label for="detail-comment" style="margin-top:14px">Комментарий к решению</label><textarea id="detail-comment" maxlength="500" placeholder="Например: согласовано с менеджером проекта">${esc(comment(p))}</textarea><div id="detail-error" class="field-error" role="alert"></div>${btn('Сохранить правку','save-edit','small')}</div>`;
+ return `<div class="recommendation-hero"><div class="label">Рекомендуем ${p.recommended_qty?'заказать':'сохранить текущий запас'}</div><div class="value">${fmt(p.recommended_qty)} <span>${p.unit}</span></div><p>${p.recommended_qty?`На горизонт ${days(p.horizon_days??demo.horizon)} · кратность ${unit(p.moq,p)}`:'Дополнительный заказ не требуется'}${saved.scenario==='growth'?' · сценарий +20%':''}</p></div><div class="section-label">Почему именно столько</div><div class="breakdown">${[['Прогноз на горизонт',p.forecast_horizon,''],['Страховой запас',p.safety_stock,'+'],['Текущий остаток',p.stock_current,'−'],['Товар в пути',p.in_transit_in_horizon,'−']].map(([label,n,sign])=>`<div class="breakdown-row"><span>${label}</span><strong>${sign} ${unit(n,p)}</strong></div>`).join('')}<div class="breakdown-row"><span>Потребность до округления</span><strong>${unit(rounded,p)}</strong></div><div class="breakdown-row total"><span>${p.need<=0?'Запаса достаточно':'С учётом кратности'}</span><strong>${unit(p.recommended_qty,p)}</strong></div></div>${demo.live?`<div class="explain-row">${btn('<span class="ai-badge">ИИ</span> Объяснить простыми словами','explain-product','small')}</div>`:''}${reasonList(p)}<div class="details-grid"><div class="detail-tile">Запаса хватит<strong>${days(p.cover_days)}</strong></div><div class="detail-tile">Срок поставки<strong>${days(p.lead_time_days)}</strong>${leadSource(p)}</div>${p.horizon_days?`<div class="detail-tile">Горизонт расчёта<strong>${days(p.horizon_days)}</strong><small>срок поставки + ${demo.reviewDays} дн. до следующего заказа</small></div>`:''}${p.abc?`<div class="detail-tile">Категория важности<strong>${esc(p.abc)}</strong><small>${abcHint(p.abc)}</small></div>`:''}</div>${whatIfBlock(p)}${saved.scenario==='growth'?'<div class="notice info">Срочность, покрытие и графики показаны для базового сценария. '+(demo.live?'Количество +20% пересчитано движком.':'Количество +20% задано заранее.')+'</div>':''}<details class="disclosure"><summary>${p.quality} · посмотреть оговорки</summary><p>${p.warnings.map(esc).join('<br>')}</p></details><div class="edit-form"><label for="detail-qty">Ваше количество к заказу</label><div class="qty"><input id="detail-qty" type="number" min="0" step="1" value="${quantity(p)}">${p.unit}</div><div class="field-hint">Рекомендация ${unit(p.recommended_qty,p)} останется видимой. Кратность: ${unit(p.moq,p)}</div><label for="detail-comment" style="margin-top:14px">Комментарий к решению</label><textarea id="detail-comment" maxlength="500" placeholder="Например: согласовано с менеджером проекта">${esc(comment(p))}</textarea><div id="detail-error" class="field-error" role="alert"></div>${btn('Сохранить правку','save-edit','small')}</div>`;
 }
 
 function leadSource(p){const src=(demo.leadText?.[p.supplier]||'').split('·')[1];return src?`<small>${esc(src.trim())}</small>`:'';}
@@ -152,8 +198,8 @@ function abcHint(c){return ({'1':'ядро ассортимента · серв�
 function coverCell(p){
  if(p.cover_days==null)return '<span class="muted">—</span>';
  if(!p.stock_current&&p.urgency!=='OK')return '<span class="cover-none">Нет в наличии</span>';
- const cls=p.cover_days<(p.lead_time_days||30)?'cover-low':'';
- return cls?`<span class="${cls}">${days(p.cover_days)}</span>`:days(p.cover_days);
+ const cls=p.cover_days<(p.lead_time_days||30)?'cover-low':'', text=p.cover_days<1?'меньше дня':days(p.cover_days);
+ return cls?`<span class="${cls}">${text}</span>`:text;
 }
 function reasonList(p){
  const facts=String(p.reason_text||'').split(/\.\s+(?=[А-ЯЁA-Z])/).map(x=>x.replace(/\.$/,'').trim()).filter(Boolean);
@@ -183,6 +229,52 @@ function askBody(p){
  const c=chats[p.id]||{};
  const qs=[`Почему по этому товару рекомендовано ${fmt(p.recommended_qty)} ${p.unit}?`,'Что будет, если поставка задержится на 2 недели?',`Какие ещё критичные позиции ${p.supplier} без товара в пути?`];
  return `<div class="ask"><div class="ask-suggest">${qs.map(q=>`<button class="chip" data-action="ask-fill" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div><textarea id="ask-input" maxlength="2000" placeholder="Спросите о расчёте по этому товару…">${esc(c.q||'')}</textarea><div class="ask-actions">${btn(c.loading?'Думаю…':'Спросить','ask-send','primary',c.loading?'disabled':'')}</div>${c.error?`<div class="notice">${esc(c.error)}</div>`:''}${c.answer?`<div class="ask-answer"><div class="ask-check ${c.numbers_ok?'ok':'warn'}">${c.numbers_ok?'✓ Числа сверены с расчётом':'⚠ Есть числа не из данных: '+esc((c.unsupported||[]).join(', '))}</div><div class="ask-text">${esc(c.answer).replace(/\n/g,'<br>')}</div></div>`:''}<div class="context-note">${icon('info')} Помощник отвечает только по результатам расчёта и не может отправить заказ поставщику.</div></div>`;
+}
+
+// --- ИИ (api.py → agent/): сводка, помощник на всех экранах, объяснение в карточке
+const ai={brief:null,briefLoading:false,thread:'global',log:[],busy:false};
+function aiOff(){return `<div class="ai-off">${icon('info')}<span>Помощник выключен: не задан ключ OpenAI. Добавьте <code>OPENAI_API_KEY</code> в файл <code>.env</code> и перезапустите сервер — расчёт и всё остальное работают без него.</span></div>`;}
+function aiBriefBlock(){
+ if(!demo.live)return '';
+ if(demo.aiChat===undefined){aiStatus().then(()=>{if(state.page==='Сегодня')render();});return '';}
+ if(!demo.aiChat)return `<section class="ai-brief off">${aiOff()}</section>`;
+ if(!ai.brief&&!ai.briefLoading)loadBrief();
+ const body=ai.briefLoading?'<div class="ai-loading"><i></i><i></i><i></i> Помощник читает расчёт…</div>':ai.brief?.error?`<div class="ai-off">${icon('alert')}<span>${esc(ai.brief.error)}</span></div>`:(ai.brief||[]).map(b=>`<div class="ai-brief-item"><div class="ai-brief-sup">${esc(supplierName(b.supplier))}</div><strong>${esc(b.headline)}</strong>${(b.top_risks||[]).length?`<ul>${b.top_risks.map(r=>`<li>${esc(r)}</li>`).join('')}</ul>`:''}</div>`).join('');
+ return `<section class="ai-brief"><div class="ai-brief-head"><span class="ai-badge">ИИ</span><h2>Коротко от помощника</h2>${btn('Спросить','assistant-open','small')}</div><div class="ai-brief-body">${body}</div></section>`;
+}
+async function loadBrief(){
+ ai.briefLoading=true;
+ try{const run=await ensureRun();const out=[];for(const s of suppliers){const r=await fetch(`./runs/${run}/brief/${encodeURIComponent(s)}`);const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(apiError(d,r));out.push({supplier:s,...d});}ai.brief=out;}
+ catch(e){ai.brief={error:`Сводка не получилась: ${e.message}`};}
+ ai.briefLoading=false;if(state.page==='Сегодня')render();
+}
+function assistantSuggestions(){
+ const p=state.page;
+ if(p==='Сегодня')return ['С чего начать сегодня?','Какие критичные позиции ИЭК без товара в пути самые важные?','Сколько денег нужно на срочный заказ Systeme Electric?'];
+ if(p==='Закупки')return ['Какие позиции в черновике стоит перепроверить?','Где округление до кратности сильно увеличило заказ?','Что будет, если ИЭК задержит поставку на 2 недели?'];
+ if(p==='Данные')return ['Каким данным в расчёте можно доверять меньше всего?','Почему остаток ИЭК — оценка?','Как считается упущенный спрос?'];
+ return ['Какие риски дефицита сейчас главные?','Сколько позиций у каждого поставщика нужно заказать?','Почему «Петля LOOP» не заказывается?'];
+}
+function renderAssistant(){
+ let d=$('#assistant-dialog');
+ if(!d){d=document.createElement('dialog');d.id='assistant-dialog';d.className='assistant-dialog';document.body.append(d);}
+ const body=demo.aiChat===undefined?'<div class="ai-loading"><i></i><i></i><i></i> Проверяем помощника…</div>':!demo.aiChat?aiOff():`${ai.log.length?'':`<div class="ask-suggest">${assistantSuggestions().map(q=>`<button class="chip" data-action="assistant-fill" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>`}<div class="assistant-log">${ai.log.map(m=>m.role==='user'?`<div class="msg user">${esc(m.text)}</div>`:`<div class="msg bot">${m.error?`<span class="cover-none">${esc(m.error)}</span>`:`<div class="ask-check ${m.numbers_ok?'ok':'warn'}">${m.numbers_ok?'✓ Числа сверены с расчётом':'⚠ Есть числа не из данных: '+esc((m.unsupported||[]).join(', '))}</div>${esc(m.text).replace(/\n/g,'<br>')}`}</div>`).join('')}${ai.busy?'<div class="msg bot"><div class="ai-loading"><i></i><i></i><i></i> Думаю…</div></div>':''}</div><div class="assistant-input"><textarea id="assistant-input" maxlength="2000" placeholder="Спросите о закупках, остатках, рисках…"></textarea>${btn('Отправить','assistant-send','primary',ai.busy?'disabled':'')}</div>`;
+ d.innerHTML=`<div class="modal-heading"><div><span class="ai-badge">ИИ</span> <strong>Помощник закупщика</strong><div class="card-sub">Отвечает по результатам расчёта. Заказы не отправляет.</div></div><button class="icon-btn" data-action="assistant-close" aria-label="Закрыть">${icon('close')}</button></div>${body}`;
+ const log=d.querySelector('.assistant-log');if(log)log.scrollTop=log.scrollHeight;
+ return d;
+}
+async function openAssistant(q){
+ const d=renderAssistant();if(!d.open)d.showModal();
+ if(demo.aiChat===undefined){await aiStatus();renderAssistant();}
+ if(q&&demo.aiChat){$('#assistant-input').value=q;}
+ $('#assistant-input')?.focus();
+}
+async function sendAssistant(){
+ const q=$('#assistant-input')?.value.trim();if(!q||ai.busy)return;
+ ai.log.push({role:'user',text:q});ai.busy=true;renderAssistant();
+ try{const run=await ensureRun();const d=await apiPost(`./runs/${run}/chat`,{message:q,thread_id:ai.thread});ai.log.push({role:'bot',text:d.answer,numbers_ok:d.numbers_ok,unsupported:d.unsupported_numbers});}
+ catch(e){ai.log.push({role:'bot',error:e.message});}
+ ai.busy=false;renderAssistant();$('#assistant-input')?.focus();
 }
 function renderProduct(){
  const p=find(state.productId);if(!p)return;
@@ -220,12 +312,12 @@ function exportCsv(){
  const head=['Код 1С','Артикул','Наименование','Ед.','Количество','Поставщик','Срочность'];
  const lines=[head,...saved.approved.rows].map(r=>r.map(cell).join(';'));
  if(saved.approved.by)lines.push('',`Утвердил;${cell(saved.approved.by)};${new Date(saved.approved.at).toLocaleString('ru-RU')}`);
- download(new Blob(['﻿'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'}),`SupplyAI-${saved.approved.at.slice(0,10)}.csv`);
+ download(new Blob(['﻿'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'}),`QadamSupply-${saved.approved.at.slice(0,10)}.csv`);
  toast('CSV сформирован из утверждённых количеств');
 }
 function exportApproved(){
  if(!saved.approved)return;
- download(buildWorkbook(saved.approved.rows,{by:saved.approved.by,at:saved.approved.at}),`SupplyAI-${saved.approved.at.slice(0,10)}.xlsx`);toast('XLSX сформирован из утверждённых количеств');
+ download(buildWorkbook(saved.approved.rows,{by:saved.approved.by,at:saved.approved.at}),`QadamSupply-${saved.approved.at.slice(0,10)}.xlsx`);toast('XLSX сформирован из утверждённых количеств');
 }
 const actions={
  'recommendations':()=>navigate('Закупки'), 'catalog':()=>navigate('Товары'),
@@ -234,7 +326,9 @@ const actions={
  'transit':()=>{navigate('Закупки');state.risk='В пути';render();},
  'risk':b=>{navigate('Закупки');state.risk=b.dataset.risk;render();},
  'filter-risk':b=>{state.risk=b.dataset.risk;state.selected.clear();render();},
- 'clear-filters':()=>{state.query='';state.supplier='Все';state.category='Все';state.risk='Все';state.transit='Все';state.oneoff='Все';state.abc='Все';state.selected.clear();render();},
+ 'clear-filters':()=>{state.query='';state.supplier='Все';state.category='Все';state.risk='Все';state.transit='Все';state.oneoff='Все';state.abc='Все';state.review=false;state.restored=false;state.selected.clear();render();},
+ 'clear-restored':()=>{state.restored=false;render();},
+ 'clear-review':()=>{state.review=false;render();},
  'urgent-bare':b=>{navigate('Закупки');Object.assign(state,{risk:'CRITICAL',transit:'Нет',supplier:b.dataset.supplier||'Все'});render();},
  'oneoff':b=>{navigate('Закупки');Object.assign(state,{risk:'Все',oneoff:'Есть',supplier:b.dataset.supplier||'Все'});render();},
  'product':b=>openProduct(b.dataset.id), 'product-data':b=>openProduct(b.dataset.id,'data'),
@@ -265,6 +359,19 @@ const actions={
    try{const run=await ensureRun();const d=await apiPost(`./runs/${run}/chat`,{message:`Товар ${p.sku} (${p.supplier}): ${q}`,thread_id:p.sku.slice(0,60)});chats[p.id]={q,answer:d.answer,numbers_ok:d.numbers_ok,unsupported:d.unsupported_numbers};}
    catch(e){chats[p.id]={q,error:e.message};}
    if(state.productId===p.id&&state.detailTab==='ask')renderProduct();},
+ 'today-add':b=>{const t=todayTasks().orders.find(x=>x.key===b.dataset.task);if(!t)return;const n=addToDraft(t.items.map(p=>p.id));toast(n?`Добавлено в черновик: ${positions(n)}`:'Эти позиции уже в черновике');},
+ 'today-open':b=>{navigate('Закупки');Object.assign(state,{risk:'CRITICAL',transit:'Нет',supplier:b.dataset.supplier||'Все',abc:b.dataset.important?(b.dataset.supplier==='IEK'?'A':'1'):'Все'});render();},
+ 'today-review':()=>{navigate('Закупки');state.review=true;render();},
+ 'today-coming':()=>{navigate('Закупки');Object.assign(state,{risk:'CRITICAL',transit:'Есть'});render();},
+ 'today-example':b=>openProduct(b.dataset.id,'history'),
+ 'open-draft':()=>navigate('Закупки','draft'),
+ 'go-overview':()=>navigate('Обзор'),
+ 'today-restored':()=>{navigate('Закупки');state.restored=true;render();},
+ 'assistant-open':()=>openAssistant(),
+ 'assistant-close':()=>$('#assistant-dialog')?.close(),
+ 'assistant-fill':b=>{$('#assistant-input').value=b.dataset.q;sendAssistant();},
+ 'assistant-send':()=>sendAssistant(),
+ 'explain-product':async()=>{if(!saveProductEdit())return;const p=find(state.productId);state.detailTab='ask';chats[p.id]={q:'Объясни простыми словами, почему рекомендовано именно такое количество и что будет, если не заказать.'};renderProduct();if(demo.aiChat===undefined)await aiStatus();renderProduct();if(demo.aiChat)actions['ask-send']();},
  'export':exportApproved,'export-csv':exportCsv,'settings':settings,'close-settings':()=>$('#settings-dialog').close(),
  'apply-settings':()=>{const scenario=$('input[name="scenario"]:checked').value;if(saved.scenario!==scenario){saved.scenario=scenario;invalidate();persist();}$('#settings-dialog').close();render();toast('Демонстрационный сценарий применён');},
  'reset-prompt':()=>{const d=$('#confirm-dialog');d.innerHTML=`<div class="modal-heading"><h2>Сбросить демо-правки?</h2></div><p>Будут удалены ручные количества, комментарии и черновик в этом браузере. Исходные демо-товары останутся.</p><div class="modal-actions">${btn('Отмена','close-modal')}${btn('Сбросить','reset','danger')}</div>`;d.showModal();},
@@ -276,6 +383,7 @@ document.addEventListener('click',e=>{
  const row=e.target.closest('[data-row]');if(row&&!e.target.closest('input,button,a'))openProduct(row.dataset.row);
 });
 document.addEventListener('input',e=>{if(e.target.id==='list-search'){state.query=e.target.value;state.selected.clear();render();}if(e.target.id==='approver')syncApprove();});
+document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){if(e.target.id==='assistant-input')sendAssistant();if(e.target.id==='ask-input')actions['ask-send']();}});
 function syncApprove(){const b=$('#approve-button');if(b)b.disabled=!($('#acknowledge')?.checked&&$('#approver')?.value.trim());}
 document.addEventListener('change',e=>{
  const t=e.target;

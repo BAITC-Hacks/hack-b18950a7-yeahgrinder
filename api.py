@@ -17,7 +17,7 @@ from engine.models import Params, Supplier, Urgency
 from service import ProcurementService
 import web_data
 
-app = FastAPI(title="Procurement Copilot API", version="1.0")
+app = FastAPI(title="QadamSupply API", version="1.0")
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 WEB = Path(__file__).resolve().parent / "web"
 
@@ -156,7 +156,7 @@ def brief(run_id: str, supplier: Supplier):
         raise HTTPException(503, str(exc)) from exc
 
 
-# ---------------------------------------------------------------- веб-интерфейс (web/, SupplyAI)
+# ---------------------------------------------------------------- веб-интерфейс (web/, QadamSupply)
 
 @app.on_event("startup")
 def warm_ui_cache():
