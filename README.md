@@ -14,7 +14,7 @@ NVIDIA (опц.)    независимая проверка ответов ча�
 
 Без ключей API работает всё, кроме чата: расчёт, интерфейс, утверждение, экспорт.
 
-Интерфейс SupplyAI: [возможности и файлы frontend](docs/FRONTEND_UI.md).
+Интерфейс SupplyAI: [возможности и файлы frontend](web/README.md).
 
 Проверка проекта с двумя ZIP: [инструкция для участника команды](docs/TESTING.md).
 ```bash
@@ -27,7 +27,7 @@ NVIDIA (опц.)    независимая проверка ответов ча�
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 cp .env.example .env          # ключи AI — по желанию
-.venv/bin/uvicorn api:app --port 8000      # HTTP API (/docs) и интерфейс SupplyAI из корня проекта (или web/, если есть) на http://127.0.0.1:8000
+.venv/bin/uvicorn api:app --port 8000      # HTTP API (/docs) и интерфейс SupplyAI из web/ на http://127.0.0.1:8000
 .venv/bin/streamlit run app.py              # запасной интерфейс для аналитика
 .venv/bin/python -m pytest -q               # тесты
 ```
@@ -184,10 +184,10 @@ LangGraph: модель ⇄ инструменты, не больше 6 шаго
 ## Структура
 
 ```text
-index.html, *.js, styles.css — интерфейс SupplyAI в корне (JS, без сборки), данные из /ui/data
+web/              интерфейс SupplyAI (JS, без сборки), данные из /ui/data
 web_data.py       адаптер расчёта для frontend
 app.py            запасной Streamlit-интерфейс
-api.py            FastAPI: API сервиса + frontend (раздача только разрешённых файлов)
+api.py            FastAPI: API сервиса + frontend (статические файлы только из web/)
 service.py        общий сервис: расчёт, хранение, решения, экспорт, what-if
 config.yaml       параметры расчёта и AI
 engine/load.py    загрузка выгрузок 1С по поставщикам, кэш, оговорки при битых файлах

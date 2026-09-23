@@ -4,7 +4,8 @@ Run with the project's Python environment and Node.js 18+ installed:
     python -m pytest tests/test_frontend_modules.py -q
 
 These tests exercise ES modules without a browser, package.json changes or an API
-server. They do not replace the manual UI checks in the teammate test guide.
+server. They prefer the active web/ frontend, falling back to the root layout for
+older checkouts. They do not replace the manual UI checks in the teammate guide.
 """
 
 import base64
@@ -21,6 +22,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+FRONTEND_ROOT = ROOT / "web" if (ROOT / "web").is_dir() else ROOT
 SHEET_NS = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 REL_NS = {"r": "http://schemas.openxmlformats.org/package/2006/relationships"}
 TYPE_NS = {"t": "http://schemas.openxmlformats.org/package/2006/content-types"}
@@ -49,7 +51,7 @@ const source = readFileSync(process.argv[2], 'utf8');
 const module = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 """
         result = subprocess.run(
-            [node, "--input-type=module", "-", str(ROOT / filename), json.dumps(payload)],
+            [node, "--input-type=module", "-", str(FRONTEND_ROOT / filename), json.dumps(payload)],
             input=prelude + body,
             text=True,
             capture_output=True,

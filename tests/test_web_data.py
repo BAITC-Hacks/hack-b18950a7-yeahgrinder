@@ -179,7 +179,7 @@ def test_frontend_assets_are_reachable_with_browser_mime_types(ui_client, asset)
     assert response.status_code == 200
     mime = response.headers["content-type"].split(";", 1)[0]
     assert mime in ({"text/css"} if asset.endswith(".css") else {"text/javascript", "application/javascript"})
-    assert response.content == (Path(__file__).resolve().parents[1] / asset).read_bytes()
+    assert response.content == (Path(__file__).resolve().parents[1] / "web" / asset).read_bytes()
 
 
 @pytest.mark.parametrize("path", ["/api.py", "/config.yaml", "/.env", "/ui/unknown"])
