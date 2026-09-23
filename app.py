@@ -17,9 +17,10 @@ def get_data():
 
 
 @st.cache_data(show_spinner="Считаю потребность…")
-def run(review_days, lead_days, service_level, growth_pct, oneoff_k, groups):
+def run(review_days, lead_days, service_level, growth_pct, oneoff_k, groups, suppliers):
     p = Params(review_days=review_days, lead_days=lead_days, service_level=service_level,
-               growth_pct=growth_pct, oneoff_k=oneoff_k, groups=list(groups) or None)
+               growth_pct=growth_pct, oneoff_k=oneoff_k, groups=list(groups) or None,
+               suppliers=list(suppliers) or None)
     return compute(get_data(), p)
 
 
@@ -30,7 +31,8 @@ except DataError as e:
     st.stop()
 groups = ds.items.groupby("group")["group_name"].first()
 
-DEFAULTS = {"sel": [], "review": 30, "lead": 30, "service": 0.95, "growth": 0.0, "k": 6.0}
+DEFAULTS = {"suppliers": [], "sel": [], "review": 30, "lead_auto": True, "lead": 30,
+            "service": 0.95, "growth": 0.0, "k": 6.0}
 if "params" not in st.session_state:
     st.session_state.params = DEFAULTS.copy()
 
@@ -39,17 +41,23 @@ with st.sidebar:
     # форма: изменения применяются только по кнопке «Сохранить», а не на каждый клик
     with st.form("params_form"):
         cur = st.session_state.params
+        suppliers = st.multiselect("Поставщики", sorted(ds.items["supplier"].unique()),
+                                   default=cur["suppliers"], placeholder="Все поставщики")
         sel = st.multiselect("Категории", groups.index, default=cur["sel"],
                              format_func=lambda g: f"{g} · {groups[g]}")
         review = st.slider("Период до следующего заказа, дн.", 7, 90, cur["review"])
-        lead = st.slider("Срок поставки по умолчанию, дн.", 5, 90, cur["lead"],
-                         help="Для товаров из «Пути» срок берётся из дат заказа и прихода")
-        service = st.select_slider("Уровень сервиса", [0.8, 0.85, 0.9, 0.95, 0.98, 0.99], cur["service"])
+        lead_auto = st.checkbox("Срок поставки из данных", cur["lead_auto"],
+                                help="ИЭК — по датам заказов в пути, SE — допущение 45 дней")
+        lead = st.slider("Срок поставки для всех, дн.", 5, 90, cur["lead"], disabled=lead_auto)
+        service = st.select_slider("Уровень сервиса для товаров без категории",
+                                   [0.8, 0.85, 0.9, 0.95, 0.98, 0.99], cur["service"],
+                                   help="Для категорий 1/A — 98%, 2/B/5 — 95%, 3/C — 90%")
         growth = st.number_input("Прогноз прироста, %", -50.0, 100.0, cur["growth"], 5.0)
         k = st.slider("Строгость отсечения разовых заказов", 3.0, 12.0, cur["k"], 0.5,
                       help="Меньше — строже: больше строк считаются разовыми")
         if st.form_submit_button("Сохранить", type="primary", width="stretch"):
-            st.session_state.params = {"sel": sel, "review": review, "lead": lead,
+            st.session_state.params = {"suppliers": suppliers, "sel": sel, "review": review,
+                                       "lead_auto": lead_auto, "lead": lead,
                                        "service": service, "growth": growth, "k": k}
             st.rerun()
     if st.session_state.params != DEFAULTS and st.button("Сбросить", width="stretch"):
@@ -57,11 +65,13 @@ with st.sidebar:
         st.rerun()
 
 p = st.session_state.params
-res = run(p["review"], p["lead"], p["service"], p["growth"], p["k"], tuple(p["sel"]))
+res = run(p["review"], None if p["lead_auto"] else p["lead"], p["service"], p["growth"], p["k"],
+          tuple(p["sel"]), tuple(p["suppliers"]))
 o = res.orders
 
 st.title("Рекомендованные заказы поставщикам")
-st.caption(f"Данные на {ds.as_of:%d.%m.%Y} · склад Алматы")
+st.caption(f"Данные на {ds.as_of:%d.%m.%Y} · склад Алматы · поставщики: "
+           f"{', '.join(sorted(ds.items['supplier'].unique()))}")
 if res.warnings:
     with st.expander(f"⚠️ Расчёт сделан с оговорками ({len(res.warnings)})"):
         for w in res.warnings:
@@ -76,18 +86,19 @@ c4.metric("Товаров с досчитанным спросом", int((o["los
 
 show_all = st.toggle("Показать и те, что заказывать не нужно")
 view = o if show_all else need
-cols = ["urgency", "code", "article", "name", "base_month", "stock_now", "in_transit",
-        "forecast_need", "safety_stock", "moq", "order_qty", "reason"]
+cols = ["urgency", "code", "article", "name", "category", "base_month", "stock_now", "in_transit",
+        "forecast_need", "safety_stock", "moq", "order_qty", "order_value", "reason"]
 labels = {"urgency": "Срочность", "code": "Код 1С", "article": "Артикул", "name": "Наименование",
           "base_month": "Спрос/мес", "stock_now": "Остаток", "in_transit": "В пути",
           "forecast_need": "Прогноз", "safety_stock": "Страх. запас", "moq": "Кратн.",
-          "order_qty": "К заказу", "reason": "Обоснование"}
+          "order_qty": "К заказу", "reason": "Обоснование",
+          "category": "Катег.", "order_value": "Сумма, ₸"}
 
 for supplier, part in view.groupby("supplier"):
     st.subheader(f"Поставщик: {supplier} · {int((part['order_qty'] > 0).sum())} позиций")
     edited = st.data_editor(
         part[cols].rename(columns=labels), hide_index=True, width="stretch",
-        disabled=[v for c, v in labels.items() if c != "order_qty"], key=f"ed_{supplier}",
+        disabled=[v for c, v in labels.items() if c != "order_qty"], key=f"ed_{supplier}_{show_all}",
         column_config={"Обоснование": st.column_config.TextColumn(width="large")})
     buf = io.BytesIO()
     export = edited[edited["К заказу"] > 0][["Код 1С", "Артикул", "Наименование", "К заказу"]]

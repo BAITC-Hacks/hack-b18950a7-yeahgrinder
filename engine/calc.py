@@ -22,11 +22,17 @@ MONTH_NAMES = ["янв", "фев", "мар", "апр", "май", "июн", "ию
 @dataclass
 class Params:
     review_days: int = 30        # период до следующего заказа
-    lead_days: int = 30          # срок поставки, если по товару он неизвестен
-    service_level: float = 0.95  # вероятность не уйти в дефицит за горизонт
+    lead_days: int | None = None  # срок поставки для всех товаров; None — из данных поставщика
+    service_level: float = 0.95  # для товаров без категории в service_by_category
     growth_pct: float = 0.0      # прогноз прироста спроса, %
     oneoff_k: float = 6.0        # строгость отсечения разовых заказов (в MAD)
-    groups: list[str] | None = None  # фильтр категорий (префиксы кода)
+    groups: list[str] | None = None  # фильтр товарных групп (префиксы кода)
+    suppliers: list[str] | None = None  # фильтр поставщиков
+    # вероятность не уйти в дефицит по категории: важнее товар — выше сервис и страховой запас.
+    # SE: категории из файла менеджера (1–3, 5), ИЭК: ABC по числу строк накладных.
+    service_by_category: dict[str, float] = field(default_factory=lambda: {
+        "1": 0.98, "A": 0.98, "2": 0.95, "B": 0.95, "5": 0.95, "3": 0.90, "C": 0.90})
+    no_auto_categories: tuple[str, ...] = ("7",)  # новинка/выведен — решает менеджер
     transit_override: dict[str, float] = field(default_factory=dict)  # code → qty в пути (для проверок)
 
 
@@ -63,6 +69,11 @@ def detect_oneoffs(lines: pd.DataFrame, k: float) -> pd.DataFrame:
     others_med = ((total - lines["qty"]) / (n - 1).clip(lower=1)).clip(lower=1)
     rare = (n < 5) & (lines["qty"] >= 0.8 * total) & (lines["qty"] >= 10 * others_med)
     flag = frequent | rare
+    # крупные строки, которые повторяются в 3+ разных месяцах, — это обычный спрос
+    # крупного покупателя (у SE коробка уходит по 60–90 тыс. регулярно), а не разовая сделка
+    big = (n >= 5) & (lines["qty"] > thr)
+    months_with_big = month.where(big).groupby(lines["code"]).transform("nunique")
+    flag = flag & ~(big & (months_with_big >= 3))
     thr = thr.where(frequent, 10 * others_med)
     med = med.where(frequent, others_med)
     out = lines[flag].copy()
@@ -91,11 +102,14 @@ def _season_index(series: np.ndarray, months: pd.DatetimeIndex) -> np.ndarray | 
 def _sanitize(p: Params) -> Params:
     """Параметры из UI/агента приводим к допустимым границам, а не падаем."""
     return Params(review_days=int(min(max(p.review_days, 1), 365)),
-                  lead_days=int(min(max(p.lead_days, 1), 365)),
+                  lead_days=None if p.lead_days is None else int(min(max(p.lead_days, 1), 365)),
                   service_level=float(min(max(p.service_level, 0.5), 0.999)),
                   growth_pct=float(min(max(p.growth_pct, -90), 500)),
                   oneoff_k=float(min(max(p.oneoff_k, 1), 50)),
-                  groups=p.groups, transit_override=dict(p.transit_override))
+                  groups=p.groups, suppliers=p.suppliers, transit_override=dict(p.transit_override),
+                  service_by_category={k: float(min(max(v, 0.5), 0.999))
+                                       for k, v in p.service_by_category.items()},
+                  no_auto_categories=tuple(p.no_auto_categories))
 
 
 def compute(ds: Dataset, p: Params = Params()) -> Result:
@@ -109,6 +123,8 @@ def compute(ds: Dataset, p: Params = Params()) -> Result:
     items = ds.items.set_index("code")
     if p.groups:
         items = items[items["group"].isin(p.groups)]
+    if p.suppliers:
+        items = items[items["supplier"].isin(p.suppliers)]
     codes = items.index
 
     # --- помесячные продажи: 2024 из месячного отчёта, 2025+ из накладных
@@ -130,9 +146,11 @@ def compute(ds: Dataset, p: Params = Params()) -> Result:
              .reindex(index=codes, columns=months).fillna(0.0))
 
     transit = ds.transit[ds.transit["code"].isin(codes)]
-    lead_by_code = ((transit["arrival_date"] - transit["order_date"]).dt.days
-                    .groupby(transit["code"]).median())
-    comp_season = ds.company_season.reindex(range(1, 13)).to_numpy()
+    t_dated = transit.dropna(subset=["order_date"])
+    lead_by_code = ((t_dated["arrival_date"] - t_dated["order_date"]).dt.days
+                    .groupby(t_dated["code"]).median())
+    flat = np.ones(12)
+    sup_season = {k: v.reindex(range(1, 13)).fillna(1.0).to_numpy() for k, v in ds.supplier_season.items()}
 
     # --- 2024: строк нет, выбросы ловим по месяцам (Hampel)
     raw_np, oneoff_np = raw.to_numpy(copy=True), oneoff_m.to_numpy(copy=True)
@@ -154,12 +172,18 @@ def compute(ds: Dataset, p: Params = Params()) -> Result:
     # --- групповая сезонность (из очищенных продаж), с усадкой к компании
     moy = hist.month.to_numpy() - 1
     group_season = {}
-    for g, idx in pd.Series(range(len(codes)), index=items["group"].to_numpy()).groupby(level=0):
+    gkey = pd.Series(range(len(codes)), index=pd.MultiIndex.from_arrays(
+        [items["supplier"].to_numpy(), items["group"].to_numpy()]))
+    for (sup, g), idx in gkey.groupby(level=[0, 1]):
+        parent = sup_season.get(sup, flat)
         s = _season_index(clean_np[idx.to_numpy(), :H].sum(axis=0), hist)
         w = 0.7 if len(idx) >= 5 else 0.4
-        group_season[g] = comp_season if s is None else w * s + (1 - w) * comp_season
+        group_season[(sup, g)] = parent if s is None else w * s + (1 - w) * parent
 
-    z = NormalDist().inv_cdf(p.service_level)
+    z_default = NormalDist().inv_cdf(p.service_level)
+    z_by_cat = {k: NormalDist().inv_cdf(v) for k, v in p.service_by_category.items()}
+    svc_by_cat = dict(p.service_by_category)
+    stock_current = ds.stock_current
 
     # --- всё, что нужно внутри цикла, раскладываем по товарам заранее (без фильтров в цикле)
     item_rec = items.to_dict("index")
@@ -188,15 +212,26 @@ def compute(ds: Dataset, p: Params = Params()) -> Result:
             it = item_rec[code]
             x = clean_np[i, :H].copy()
             active = np.flatnonzero(raw_np[i, :H] > 0)
-            lead = int(lead_by_code.get(code, p.lead_days))
+            flags = []
+            sup = it["supplier"]
+            if code in lead_by_code.index:
+                lead, lead_src = int(lead_by_code[code]), "по заказу в пути"
+            elif p.lead_days is not None:
+                lead, lead_src = p.lead_days, "из настроек"
+            else:
+                d_lead, lead_src = ds.lead_default.get(sup, (None, "допущение"))
+                lead = int(d_lead) if d_lead else 30
+            if lead_src == "допущение":
+                flags.append("LEAD_ASSUMED")
             horizon = min(lead + p.review_days, max_h)
 
             # сезонность: своя (если ≥ 18 мес. продаж и объём), иначе группы
-            season, season_src = group_season[it["group"]], "группы"
+            gs = group_season[(sup, it["group"])]
+            season, season_src = gs, "группы"
             if len(active) >= 18 and x.mean() >= 10:
                 own = _season_index(x, hist)
                 if own is not None:
-                    season, season_src = 0.6 * own + 0.4 * group_season[it["group"]], "товара"
+                    season, season_src = 0.6 * own + 0.4 * gs, "товара"
             season = np.clip(np.nan_to_num(season, nan=1.0), 0.3, 3.0)
             season = season / season.mean()
 
@@ -204,11 +239,16 @@ def compute(ds: Dataset, p: Params = Params()) -> Result:
             lost = np.zeros(H)
             first = active[0] if len(active) else H
             st_row = stock_np[i, :H]
-            out_of_stock = (idx_h > first) & (st_row <= 0)
-            in_stock = (idx_h >= first) & ~out_of_stock
-            if out_of_stock.any() and in_stock.sum() >= 3:
+            # дефицит: остаток на начало месяца ≤ 0 И продажи упали ниже половины обычного —
+            # если товар пришёл в середине месяца и нормально продавался, не досчитываем
+            zero_stock = (idx_h > first) & (st_row <= 0)
+            in_stock = (idx_h >= first) & ~zero_stock
+            out_of_stock = np.zeros(H, dtype=bool)
+            if zero_stock.any() and in_stock.sum() >= 3:
                 base_d = np.median(x[in_stock] / season[moy[in_stock]])
-                lost = np.where(out_of_stock, np.maximum(base_d * season[moy] - x, 0), 0)
+                expected = base_d * season[moy]
+                out_of_stock = zero_stock & (x < 0.5 * expected)
+                lost = np.where(out_of_stock, np.maximum(expected - x, 0), 0)
             x_full = x + lost
 
             # уровень и тренд (без сезонности)
@@ -238,9 +278,17 @@ def compute(ds: Dataset, p: Params = Params()) -> Result:
             daily = (level * np.minimum(growth_m ** f_hm[:horizon], 1.5) * season[m_h - 1] * uplift
                      / f_dim[:horizon])
             forecast_need = float(daily.sum())
+            cat = str(it["category"]) if pd.notna(it["category"]) else ""
+            z = z_by_cat.get(cat, z_default)
+            svc = svc_by_cat.get(cat, p.service_level)
             safety = z * sigma * sqrt(horizon / 30) * uplift if level > 0 else 0.0
 
-            stock_now = max(float(np.nan_to_num(stock_np[i, H] - raw_np[i, H])), 0.0)
+            if code in stock_current.index:
+                stock_now, stock_src = max(float(np.nan_to_num(stock_current[code])), 0.0), "из выгрузки"
+            else:  # ИЭК: остаток на 1-е число − продажи с начала месяца (приходы не видны)
+                stock_now = max(float(np.nan_to_num(stock_np[i, H] - raw_np[i, H])), 0.0)
+                stock_src = "оценка"
+                flags.append("STOCK_ESTIMATED")
             if code in p.transit_override:
                 in_transit = float(p.transit_override[code])
             elif code in transit_rec:
@@ -251,7 +299,14 @@ def compute(ds: Dataset, p: Params = Params()) -> Result:
 
             need = forecast_need + safety - stock_now - in_transit
             moq = float(it["moq"]) if it["moq"] and np.isfinite(it["moq"]) else 1.0
-            order = ceil(need / moq - 1e-9) * moq if need > 0 and level >= 0.2 else 0.0
+            if not it.get("moq_known", True):
+                flags.append("MOQ_MISSING")
+            no_auto = cat in p.no_auto_categories
+            order = ceil(need / moq - 1e-9) * moq if need > 0 and level >= 0.2 and not no_auto else 0.0
+            if no_auto:
+                flags.append("CATEGORY_NO_AUTO")
+            elif order > 0 and need > 0 and order > 1.5 * need:
+                flags.append("MOQ_OVERSHOOT")
             daily_now = float(daily[:30].mean()) if len(daily) else 0.0
             days_cover = stock_now / daily_now if daily_now > 0 else float("inf")
 
@@ -274,7 +329,7 @@ def compute(ds: Dataset, p: Params = Params()) -> Result:
             if p.growth_pct:
                 parts[-1] += f", с приростом {p.growth_pct:+.0f}%"
             coefs = ", ".join(f"{MONTH_NAMES[m - 1]} ×{season[m - 1]:.2f}" for m in sorted(set(m_h)))
-            parts.append(f"Прогноз на {horizon} дн. (поставка {lead} + период {p.review_days}): "
+            parts.append(f"Прогноз на {horizon} дн. (поставка {lead} — {lead_src}, период {p.review_days}): "
                          f"{_fmt(forecast_need)} — сезонность {season_src}: {coefs}")
             n_oo = oo_count.get(code, 0) + int((oneoff_np[i, :H][y24h] > 0).sum())
             if n_oo:
@@ -287,22 +342,38 @@ def compute(ds: Dataset, p: Params = Params()) -> Result:
             if lost.sum() > 0:
                 parts.append(f"Досчитан упущенный спрос {_fmt(lost.sum())} {u} "
                              f"за {int(out_of_stock.sum())} мес. без остатка")
-            parts.append(f"Страховой запас {_fmt(safety)} (сервис {p.service_level:.0%}). "
-                         f"Остаток {_fmt(stock_now)}, в пути {_fmt(in_transit)}")
-            if order > 0:
+            cat_txt = f"категория {cat}, " if cat else ""
+            parts.append(f"Страховой запас {_fmt(safety)} ({cat_txt}сервис {svc:.0%}). "
+                         f"Остаток {_fmt(stock_now)} ({stock_src}), в пути {_fmt(in_transit)}")
+            if no_auto:
+                parts.append(f"Категория {cat} (новинка/выведен) — автозаказа нет, решает менеджер")
+            elif order > 0:
                 parts.append(f"Нужно {_fmt(need)} → кратность {_fmt(moq)} → заказ {_fmt(order)}")
             else:
                 parts.append("Запаса хватает — заказ не нужен" if level >= 0.2
                              else "Спроса почти нет — не заказываем")
+            if n_oo:
+                flags.append("ONE_OFF_EXCLUDED")
+            if lost.sum() > 0:
+                flags.append("STOCKOUT_RESTORED")
+            if growth_m > 1:
+                flags.append("TREND_UP")
+            elif growth_m < 1:
+                flags.append("TREND_DOWN")
+            cost = it.get("unit_cost")
+            cost = float(cost) if cost is not None and pd.notna(cost) and cost > 0 else None
 
             rows.append({
                 "code": code, "article": it["article"], "name": it["name"], "unit": u,
                 "group": it["group"], "group_name": it["group_name"], "supplier": it["supplier"],
+                "category": cat, "service_level": svc,
                 "base_month": round(base_month, 2), "forecast_need": round(forecast_need, 1),
                 "safety_stock": round(safety, 1), "stock_now": stock_now, "in_transit": in_transit,
                 "moq": moq, "order_qty": order, "days_cover": round(days_cover, 1), "lead_days": lead,
                 "urgency": urgency, "reason": ". ".join(parts) + ".",
                 "n_oneoff": n_oo, "lost_qty": round(float(lost.sum()), 1),
+                "unit_cost": cost, "order_value": round(order * cost, 2) if cost else None,
+                "stock_source": stock_src, "lead_source": lead_src, "flags": flags,
             })
             hist_codes.append(code)
             hist_raw.append(raw_np[i, :H + 1])

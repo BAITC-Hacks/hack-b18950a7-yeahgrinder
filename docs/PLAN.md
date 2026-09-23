@@ -51,30 +51,35 @@ B и C могут начинать сразу, не дожидаясь гото�
 from engine.load import load
 from engine.calc import Params, compute
 
-ds = load()                      # читает data/raw/IEK/ (распаковать IEK.zip туда)
+ds = load()                      # читает data/raw/<поставщик>/ — IEK и SE, см. docs/DATA.md
 res = compute(ds, Params())      # ~секунды на все товары
 ```
 
-`Params`: `review_days=30` (период до след. заказа), `lead_days=30` (срок поставки по
-умолчанию), `service_level=0.95`, `growth_pct=0.0` (прогноз прироста, %),
-`oneoff_k=6.0` (строгость отсечения выбросов), `groups=None` (фильтр категорий).
+`Params`: `review_days=30`, `lead_days=None` (None — срок из данных поставщика, число —
+для всех), `service_level=0.95` (для товаров без категории), `growth_pct=0.0`,
+`oneoff_k=6.0`, `groups=None` (товарные группы), `suppliers=None` (фильтр поставщиков),
+`service_by_category` (1/A 98%, 2/B/5 95%, 3/C 90%), `no_auto_categories=("7",)`.
 
 `res.orders` — одна строка на товар:
 
 | колонка | смысл |
 |---|---|
 | `code`, `article`, `name`, `unit` | код 1С, артикул ИЭК, название, ед. |
-| `group`, `group_name`, `supplier` | категория (префикс кода), её название, поставщик |
+| `group`, `group_name`, `supplier` | товарная группа (префикс кода), её название, поставщик |
 | `base_month` | регулярный спрос в месяц (без выбросов, с упущенным) |
 | `forecast_need` | прогноз спроса на срок поставки + период |
 | `safety_stock` | страховой запас |
-| `stock_now`, `in_transit` | остаток сейчас (оценка), в пути к сроку |
+| `stock_now`, `in_transit` | остаток сейчас, в пути к сроку |
 | `moq` | кратность |
 | `order_qty` | **рекомендуемый заказ** (0 — не заказывать) |
 | `days_cover`, `lead_days` | на сколько дней хватит запаса; срок поставки |
 | `urgency` | `критично` / `высокая` / `плановая` / `не нужно` |
 | `reason` | текст обоснования |
 | `n_oneoff`, `lost_qty` | сколько разовых строк исключено; сколько спроса досчитано за stockout |
+| `category`, `service_level` | категория (SE: 1/2/3/5/7 из файла; ИЭК: ABC) и её уровень сервиса |
+| `unit_cost`, `order_value` | себестоимость и сумма заказа, ₸ (только SE, у ИЭК цен нет → пусто) |
+| `stock_source`, `lead_source` | откуда остаток («из выгрузки» / «оценка») и срок поставки |
+| `flags` | список: `ONE_OFF_EXCLUDED`, `STOCKOUT_RESTORED`, `TREND_UP/DOWN`, `STOCK_ESTIMATED`, `LEAD_ASSUMED`, `MOQ_MISSING`, `MOQ_OVERSHOOT`, `CATEGORY_NO_AUTO` |
 
 `res.history` — для графика: `code, month, raw_qty, oneoff_qty, lost_qty, clean_qty, forecast`.
 `res.oneoffs` — исключённые строки: `date, doc, code, qty, threshold`.

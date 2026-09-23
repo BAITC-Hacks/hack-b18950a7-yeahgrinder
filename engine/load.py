@@ -1,8 +1,12 @@
-"""Загрузка и нормализация выгрузок партнёра (IEK.zip → data/raw/IEK/).
+"""Загрузка и нормализация выгрузок 1С по поставщикам.
 
-Отказоустойчивость: без файла продаж работать нельзя — это DataError с понятным текстом.
-Любой другой файл может отсутствовать или быть битым — расчёт продолжается без него,
-а причина попадает в Dataset.warnings и показывается менеджеру.
+Каждая подпапка data/raw/ — один поставщик (IEK.zip → data/raw/IEK/, Systeme electric.zip →
+data/raw/SE/). Файлы ищутся по началу имени, колонки — по заголовкам, поэтому разные
+форматы выгрузок (у ИЭК и SE они отличаются) читаются одним кодом.
+
+Отказоустойчивость: без файла продаж поставщик пропускается (если это единственный
+поставщик — DataError с понятным текстом). Любой другой файл может отсутствовать или быть
+битым — расчёт продолжается без него, а причина попадает в Dataset.warnings.
 
 Скорость: разобранные данные кешируются в data/cache/ (ключ — имена, размеры и даты
 изменения исходников), повторный запуск читает кеш вместо Excel.
@@ -13,28 +17,35 @@ import os
 import pickle
 import re
 
+import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
-RAW = Path(os.environ.get("DATA_DIR", ROOT / "data" / "raw" / "IEK"))
+RAW = Path(os.environ.get("DATA_DIR", ROOT / "data" / "raw"))
 CACHE = ROOT / "data" / "cache"
-CACHE_VERSION = 3  # поднять при изменении формата Dataset
+CACHE_VERSION = 5  # поднять при изменении формата Dataset
+
+SUPPLIER_NAMES = {"IEK": "ИЭК", "SE": "Systeme Electric"}
+# срок поставки, если его нельзя вывести из дат заказов в пути (допущение, видно в обосновании)
+LEAD_ASSUMED = {"Systeme Electric": 45}
 
 MONTHS_RU = {"янв": 1, "февр": 2, "март": 3, "апр": 4, "май": 5, "июнь": 6,
              "июль": 7, "авг": 8, "сент": 9, "окт": 10, "нояб": 11, "дек": 12}
+MONTHS_FULL = {"январь": 1, "февраль": 2, "март": 3, "апрель": 4, "май": 5, "июнь": 6, "июль": 7,
+               "август": 8, "сентябрь": 9, "октябрь": 10, "ноябрь": 11, "декабрь": 12}
 MONTHS_GEN = {"января": 1, "февраля": 2, "марта": 3, "апреля": 4, "мая": 5, "июня": 6, "июля": 7,
               "августа": 8, "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12}
 
-# ищем файлы по началу имени: новая выгрузка с другой датой в названии подхватится сама
-SOURCES = {  # ключ: (шаблон имени, что это, что будет без него)
-    "sales": ("Динамика продаж*.xlsx", "история продаж", ""),
-    "monthly": ("Ежемесячные продажи*.xlsx", "продажи 2024 года",
+SOURCES = {  # ключ: (шаблоны имени, что это, что будет без него)
+    "sales": (["Динамика продаж*.xlsx"], "история продаж", ""),
+    "monthly": (["Ежемесячные продажи*.xlsx"], "продажи 2024 года",
                 "сезонность считается по короткой истории"),
-    "stock": ("Ежемесячные остатки*.xlsx", "остатки",
-              "текущий остаток считается нулевым, периоды без товара не определяются"),
-    "transit": ("Путь*.xlsx", "товары в пути", "считаем, что в пути ничего нет"),
-    "moq": ("MOQ*.xlsx", "кратность отгрузки", "заказ округляется до 1"),
-    "season": ("Сезонность*.xlsx", "сезонность компании", "сезонность берётся по группам товаров"),
+    "stock": (["Ежемесячные остатки*.xlsx"], "остатки по месяцам",
+              "периоды без товара не определяются"),
+    "transit": (["Путь*.xlsx", "Товар в пути*.xlsx"], "товары в пути",
+                "считаем, что в пути ничего нет"),
+    "moq": (["MOQ*.xlsx"], "кратность отгрузки", "заказ округляется до 1"),
+    "season": (["Сезонность*.xlsx"], "сезонность поставщика", "сезонность берётся по группам товаров"),
 }
 
 
@@ -45,25 +56,36 @@ class DataError(Exception):
 @dataclass
 class Dataset:
     lines: pd.DataFrame      # строки накладных: date, doc, code, qty
-    items: pd.DataFrame      # справочник: code, name, unit, group, group_name, moq, article, supplier
+    items: pd.DataFrame      # code, name, unit, supplier, group, group_name, category,
+                             # category_source, moq, article, unit_cost
     monthly_2024: pd.DataFrame  # code, month, qty — продажи 2024 из месячного отчёта
     stock: pd.DataFrame      # code, month, stock — остаток на 1-е число
-    transit: pd.DataFrame    # code, doc, qty, order_date, arrival_date
-    company_season: pd.Series  # индекс 1..12 → коэффициент сезонности компании
+    stock_current: pd.Series  # code → остаток на дату as_of, если поставщик его дал (SE)
+    transit: pd.DataFrame    # code, doc, qty, order_date, arrival_date (order_date может быть NaT)
+    lead_default: dict       # поставщик → (дней, источник: "из заказов в пути" | "допущение")
+    supplier_season: dict    # поставщик → pd.Series 1..12 коэффициентов
     as_of: pd.Timestamp      # дата последней продажи в выгрузке
     warnings: list[str] = field(default_factory=list)
 
+    @property
+    def company_season(self) -> pd.Series:  # совместимость со старым кодом
+        return next(iter(self.supplier_season.values()), pd.Series(1.0, index=range(1, 13)))
 
-def _find(raw: Path, pattern: str) -> Path | None:
-    files = [f for f in raw.glob(pattern) if not f.name.startswith("~$")]
+
+# ---------------------------------------------------------------- помощники
+
+def _find(raw: Path, patterns: list[str]) -> Path | None:
+    files = [f for p in patterns for f in raw.glob(p) if not f.name.startswith("~$")]
     return max(files, key=lambda f: f.stat().st_mtime) if files else None
 
 
 def _month_col(label) -> pd.Timestamp | None:
-    m = re.match(r"(\w+)\.?\s+(\d{4})", str(label).strip())
-    if not m or m.group(1) not in MONTHS_RU:
+    s = str(label).strip().lower()
+    m = re.match(r"(\w+)\.?\s+(\d{4})", s)
+    if not m:
         return None
-    return pd.Timestamp(int(m.group(2)), MONTHS_RU[m.group(1)], 1)
+    mon = MONTHS_RU.get(m.group(1)) or MONTHS_FULL.get(m.group(1))
+    return pd.Timestamp(int(m.group(2)), mon, 1) if mon else None
 
 
 def _num(s: pd.Series) -> pd.Series:
@@ -74,21 +96,55 @@ def _num(s: pd.Series) -> pd.Series:
                           .str.replace(",", "."), errors="coerce")
 
 
-def _wide_to_long(df: pd.DataFrame, code_col: int, value: str) -> pd.DataFrame:
-    """Широкая таблица «товар × месяц» → длинная. Колонки-месяцы находим по заголовку."""
-    header = df.iloc[0]
-    months = {i: _month_col(header.iloc[i]) for i in range(df.shape[1])}
-    months = {i: m for i, m in months.items() if m is not None}
-    if not months:
-        raise ValueError("не нашёл колонок с месяцами в первой строке")
-    body = df.iloc[1:]
-    body = body[body.iloc[:, code_col].notna()]
-    codes = body.iloc[:, code_col].astype(str).str.strip()
-    out = [pd.DataFrame({"code": codes, "month": m, value: _num(body.iloc[:, i])})
-           for i, m in months.items()]
-    long = pd.concat(out, ignore_index=True)
-    return long[long["code"].str.lower() != "nan"]
+def _col(df: pd.DataFrame, *keys: str, exact: str | None = None):
+    """Колонка по подстроке заголовка (без учёта регистра)."""
+    for c in df.columns:
+        name = str(c).strip().lower()
+        if exact is not None and name == exact.lower():
+            return c
+        if exact is None and any(k in name for k in keys):
+            return c
+    return None
 
+
+def _with_header(path: Path, must_have: str, sheet=0, max_scan: int = 6) -> pd.DataFrame:
+    """Читает лист, находя строку заголовка по слову (у SE заголовок во 2-й строке)."""
+    raw = pd.read_excel(path, header=None, sheet_name=sheet, nrows=max_scan)
+    for i in range(len(raw)):
+        if raw.iloc[i].astype(str).str.contains(must_have, case=False, na=False).any():
+            return pd.read_excel(path, header=i, sheet_name=sheet, dtype=object)
+    raise ValueError(f"не нашёл строку заголовка со словом «{must_have}»")
+
+
+def _wide_to_long(df: pd.DataFrame, value: str) -> pd.DataFrame:
+    """Широкая таблица «товар × месяц» → длинная. Колонки-месяцы находим по заголовку."""
+    code_col = _col(df, "код")
+    if code_col is None:
+        raise ValueError("нет колонки с кодом 1С")
+    months = {c: _month_col(c) for c in df.columns}
+    months = {c: m for c, m in months.items() if m is not None}
+    if not months:
+        raise ValueError("не нашёл колонок с месяцами")
+    body = df[df[code_col].notna()]
+    codes = body[code_col].astype(str).str.strip()
+    out = [pd.DataFrame({"code": codes, "month": m, value: _num(body[c])}) for c, m in months.items()]
+    long = pd.concat(out, ignore_index=True)
+    return long[~long["code"].str.lower().isin(["nan", ""])]
+
+
+def _names(df: pd.DataFrame) -> pd.DataFrame:
+    code_col, name_col = _col(df, "код"), _col(df, exact="Номенклатура") or _col(df, "наименование")
+    unit_col = _col(df, "ед")
+    if code_col is None or name_col is None:
+        return pd.DataFrame(columns=["name", "unit"])
+    body = df[df[code_col].notna() & df[name_col].notna()]
+    out = pd.DataFrame({"name": body[name_col].astype(str).str.strip().values,
+                        "unit": body[unit_col].values if unit_col is not None else None},
+                       index=body[code_col].astype(str).str.strip().values)
+    return out[~out.index.duplicated()]
+
+
+# ---------------------------------------------------------------- читатели файлов
 
 def _read_sales(path: Path):
     s = pd.read_excel(path, dtype=str)
@@ -106,34 +162,65 @@ def _read_sales(path: Path):
     s = s[s["date"].notna() & (s["qty"] > 0) & (s["date"] >= "2025-01-01")]
     if s.empty:
         raise DataError(f"В файле «{path.name}» нет ни одной продажи с 2025 года")
-    lines = pd.DataFrame({"date": s["date"].dt.normalize(), "doc": s["Номер"].astype(str),
+    # номер накладной сбрасывается каждый год → в ключ добавляем год
+    doc = s["Номер"].astype(str) + "/" + s["date"].dt.year.astype(str)
+    lines = pd.DataFrame({"date": s["date"].dt.normalize(), "doc": doc,
                           "code": s["code"], "qty": s["qty"]}).reset_index(drop=True)
     unit = s["Ед."] if "Ед." in s.columns else pd.Series("шт", index=s.index)
-    names = pd.DataFrame({"code": s["code"], "name": s["Номенклатура"], "unit": unit}) \
+    names = pd.DataFrame({"code": s["code"], "name": s["Номенклатура"].str.strip(), "unit": unit}) \
         .groupby("code").last()
     return lines, names, dropped
 
 
 def _read_monthly(path: Path):
-    ms = pd.read_excel(path, header=None)
-    names = ms.iloc[1:].dropna(subset=[1]).set_index(ms.iloc[1:].dropna(subset=[1])[1].astype(str).str.strip())[0]
-    long = _wide_to_long(ms, code_col=1, value="qty")
-    return long[long["month"].dt.year == 2024].fillna({"qty": 0}), names.dropna().astype(str).str.strip()
+    df = _with_header(path, "Номенклатура")
+    long = _wide_to_long(df, "qty")
+    return long[long["month"].dt.year == 2024].fillna({"qty": 0}), _names(df)
 
 
 def _read_stock(path: Path):
-    st = pd.read_excel(path, header=None)
-    body = st.iloc[1:].dropna(subset=[2])
-    names = pd.DataFrame({"name": body[0].values, "unit": body[1].values},
-                         index=body[2].astype(str).str.strip())
-    names = names[names["name"].notna()]
-    return _wide_to_long(st, code_col=2, value="stock").fillna({"stock": 0}), names
+    df = _with_header(path, "Номенклатура")
+    return _wide_to_long(df, "stock").fillna({"stock": 0}), _names(df)
 
 
-def _read_transit(path: Path):
+def _read_transit(path: Path, as_of_year: int):
+    """Два формата: ИЭК — колонки-заказы «№ от <дата> (поступление до <дата>)»;
+    SE — модель менеджера (лист TDSheet): категории, себестоимость, остатки, «в пути <дата>»."""
+    sheets = pd.ExcelFile(path).sheet_names
+    extra = {}
+    if "TDSheet" in sheets:
+        df = _with_header(path, "Код 1с", sheet="TDSheet")
+        code_col = _col(df, "код 1с")
+        df = df[df[code_col].notna()].copy()
+        df["code"] = df[code_col].astype(str).str.strip()
+        df = df.drop_duplicates("code").set_index("code")
+        rows = []
+        for c in df.columns:
+            m = re.search(r"в пути\s+(\d{2})\.(\d{2})", str(c), re.I)
+            if m:
+                q = _num(df[c])
+                q = q[q > 0]
+                rows.append(pd.DataFrame({"code": q.index, "doc": str(c).strip(), "qty": q.values,
+                                          "order_date": pd.NaT,
+                                          "arrival_date": pd.Timestamp(as_of_year, int(m.group(2)),
+                                                                       int(m.group(1)))}))
+        transit = pd.concat(rows, ignore_index=True) if rows else _empty_transit()
+        cat_col, cost_col, art_col = _col(df, "категория"), _col(df, "сс реал", "себестоим"), _col(df, "артикул")
+        loc_cols = [c for c in [_col(df, exact="Свободный остаток"), _col(df, exact="Витрина"),
+                                _col(df, exact="Остаток ТЗ"), _col(df, exact="Розничный склад")] if c is not None]
+        if cat_col is not None:
+            extra["category"] = df[cat_col].map(lambda v: str(int(float(v))) if pd.notna(v) else None)
+        if cost_col is not None:
+            extra["unit_cost"] = _num(df[cost_col])
+        if loc_cols:  # как в модели менеджера: свободный + витрина + ТЗ + розница
+            extra["stock_current"] = sum(_num(df[c]).fillna(0) for c in loc_cols)
+        if art_col is not None:
+            extra["article"] = df[art_col]
+        return transit, extra, []
+
     p = pd.read_excel(path, dtype={"Код 1с": str})
-    code_col = next(c for c in p.columns if "код" in str(c).lower())
-    art_col = next((c for c in p.columns if "артикул" in str(c).lower()), None)
+    code_col = _col(p, "код")
+    art_col = _col(p, "артикул")
     rows, skipped = [], []
     for col in p.columns:
         label = str(col).replace("\xa0", " ")
@@ -151,30 +238,60 @@ def _read_transit(path: Path):
             "order_date": pd.Timestamp(int(od.group(3)), MONTHS_GEN[od.group(2)], int(od.group(1))),
             "arrival_date": pd.to_datetime(ad.group(1), format="%d.%m.%Y")}))
     transit = pd.concat(rows, ignore_index=True).dropna(subset=["qty"]) if rows else _empty_transit()
-    articles = pd.Series(dtype=str)
     if art_col is not None:
-        articles = p.set_index(p[code_col].astype(str).str.strip())[art_col].dropna()
-        articles = articles[~articles.index.duplicated()]
-    return transit, articles, skipped
+        a = p.set_index(p[code_col].astype(str).str.strip())[art_col].dropna()
+        extra["article"] = a[~a.index.duplicated()]
+    return transit, extra, skipped
 
 
 def _read_moq(path: Path):
-    moq = pd.read_excel(path, dtype=str)
-    code_col = next(c for c in moq.columns if "код" in str(c).lower())
-    moq_col = next(c for c in moq.columns if "мин" in str(c).lower() or "moq" in str(c).lower())
-    moq = moq.dropna(subset=[code_col]).assign(code=lambda x: x[code_col].str.strip())
-    moq = moq.drop_duplicates("code").set_index("code")
-    art_col = next((c for c in moq.columns if "артикул" in str(c).lower()), None)
-    return _num(moq[moq_col]), (moq[art_col] if art_col else pd.Series(dtype=str))
+    df = _with_header(path, "Код")
+    code_col = _col(df, "код")
+    moq_col = _col(df, "мин", "кратн", "moq")
+    if moq_col is None:
+        raise ValueError("нет колонки с кратностью/мин. партией")
+    df = df.dropna(subset=[code_col]).assign(code=lambda x: x[code_col].astype(str).str.strip())
+    df = df.drop_duplicates("code").set_index("code")
+    art_col = _col(df, "артикул")
+    return _num(df[moq_col]), (df[art_col] if art_col is not None else pd.Series(dtype=str))
 
 
-def _read_season(path: Path) -> pd.Series:
+def _read_season(path: Path, as_of: pd.Timestamp) -> pd.Series:
+    """Коэффициенты по годам из блока «Сезонность по годам»; неполный текущий месяц
+    (в выгрузке до as_of) досчитываем пропорционально дням, как советует спека."""
     se = pd.read_excel(path, header=None)
-    hit = se.index[se[1].astype(str).str.contains("СРЕДНЯЯ СЕЗОННОСТЬ", na=False)]
-    if len(hit) == 0:
-        raise ValueError("не нашёл блок «СРЕДНЯЯ СЕЗОННОСТЬ»")
-    vals = _num(se.iloc[hit[0] + 2:hit[0] + 14, 5]).to_numpy()
-    if len(vals) != 12 or pd.isna(vals).any() or (vals <= 0).any():
+    hit = [(r, c) for r in range(len(se)) for c in range(se.shape[1])
+           if str(se.iat[r, c]).strip() == "Месяц"]
+    if not hit:
+        raise ValueError("не нашёл таблицу «Месяц / Коэф. сезонности»")
+    r, c0 = hit[0]
+    header = se.iloc[r].map(lambda v: "" if pd.isna(v) else str(v))
+    block = se.iloc[r + 1:r + 13]
+    per_year = []
+    for c, h in header.items():
+        m = re.search(r"Коэф\. сезонности (\d{4})", h)
+        if not m:
+            continue
+        year = int(m.group(1))
+        v = _num(block[c]).to_numpy(dtype=float)
+        sales_col = header.index[header.str.contains(f"Продажи {year}")]
+        if len(sales_col):  # пересчитываем из продаж, чтобы поправить неполный месяц
+            sales = _num(block[sales_col[0]]).to_numpy(dtype=float, copy=True)
+            if year == as_of.year:
+                k = as_of.month - 1
+                sales[k] = sales[k] * as_of.days_in_month / as_of.day
+                sales[as_of.month:] = np.nan
+            mean = np.nanmean(np.where(sales > 0, sales, np.nan))
+            v = sales / mean
+        v = np.where(v > 0, v, np.nan)
+        per_year.append(v)
+    if not per_year:
+        col = header.index[header.str.upper() == "СЕЗОННОСТЬ"]
+        if not len(col):
+            raise ValueError("нет коэффициентов сезонности")
+        per_year = [_num(block[col[0]]).to_numpy(dtype=float)]
+    vals = np.nanmean(np.vstack(per_year), axis=0)
+    if np.isnan(vals).any() or (vals <= 0).any():
         raise ValueError("коэффициенты сезонности неполные")
     return pd.Series(vals / vals.mean(), index=range(1, 13))
 
@@ -185,68 +302,139 @@ def _empty_transit() -> pd.DataFrame:
                          "arrival_date": pd.Series(dtype="datetime64[ns]")})
 
 
-def _parse(raw: Path) -> Dataset:
-    warnings: list[str] = []
-    paths = {k: _find(raw, pat) for k, (pat, _, _) in SOURCES.items()}
+def _abc(lines: pd.DataFrame, codes: pd.Index, as_of: pd.Timestamp) -> pd.Series:
+    """ABC по числу строк накладных за 12 мес. (80/15/5%) — не зависит от единиц шт/м/упак."""
+    recent = lines[lines["date"] > as_of - pd.DateOffset(months=12)]
+    n = recent.groupby("code").size().reindex(codes).fillna(0).sort_values(ascending=False)
+    share = n.cumsum() / max(n.sum(), 1)
+    cat = pd.Series(np.where(share <= 0.80, "A", np.where(share <= 0.95, "B", "C")), index=n.index)
+    cat[n == 0] = "C"
+    return cat.reindex(codes)
 
-    def optional(key, reader, default):
-        pat, what, fallback = SOURCES[key]
+
+# ---------------------------------------------------------------- поставщик целиком
+
+def _parse_supplier(raw: Path, supplier: str, warnings: list[str]):
+    paths = {k: _find(raw, pats) for k, (pats, _, _) in SOURCES.items()}
+
+    def optional(key, reader, default, *args):
+        pats, what, fallback = SOURCES[key]
         if paths[key] is None:
-            warnings.append(f"Нет файла «{pat}» ({what}) — {fallback}.")
+            warnings.append(f"{supplier}: нет файла «{pats[0]}» ({what}) — {fallback}.")
             return default
         try:
-            return reader(paths[key])
+            return reader(paths[key], *args)
         except Exception as e:  # битый/чужой формат — работаем дальше без этого источника
-            warnings.append(f"Не удалось прочитать «{paths[key].name}» ({what}) — {fallback}. "
-                            f"Причина: {e}")
+            warnings.append(f"{supplier}: не удалось прочитать «{paths[key].name}» ({what}) — "
+                            f"{fallback}. Причина: {e}")
             return default
 
-    if not raw.exists():
-        raise DataError(f"Нет папки с данными {raw}. Распакуйте IEK.zip в data/raw/ "
-                        "или укажите путь в переменной DATA_DIR.")
     if paths["sales"] is None:
-        raise DataError(f"В {raw} нет файла «{SOURCES['sales'][0]}» — без истории продаж считать нечего.")
+        raise DataError(f"В {raw} нет файла «{SOURCES['sales'][0][0]}» — без истории продаж считать нечего.")
     lines, sale_names, dropped = _read_sales(paths["sales"])
+    as_of = lines["date"].max()
     if dropped:
-        warnings.append(f"Пропущено строк продаж без даты или количества: {dropped}.")
+        warnings.append(f"{supplier}: пропущено строк продаж без даты или количества: {dropped}.")
 
+    empty_names = pd.DataFrame(columns=["name", "unit"])
     monthly, ms_names = optional("monthly", _read_monthly,
-                                 (pd.DataFrame(columns=["code", "month", "qty"]), pd.Series(dtype=str)))
+                                 (pd.DataFrame(columns=["code", "month", "qty"]), empty_names))
     stock, st_names = optional("stock", _read_stock,
-                               (pd.DataFrame(columns=["code", "month", "stock"]),
-                                pd.DataFrame(columns=["name", "unit"])))
-    transit, articles, skipped = optional("transit", _read_transit, (_empty_transit(), pd.Series(dtype=str), []))
+                               (pd.DataFrame(columns=["code", "month", "stock"]), empty_names))
+    transit, extra, skipped = optional("transit", _read_transit, (_empty_transit(), {}, []), as_of.year)
     if skipped:
-        warnings.append(f"В «Пути» не разобраны колонки: {'; '.join(skipped)}")
+        warnings.append(f"{supplier}: в файле «в пути» не разобраны колонки: {'; '.join(skipped)}")
     moq_map, moq_articles = optional("moq", _read_moq, (pd.Series(dtype=float), pd.Series(dtype=str)))
-    company_season = optional("season", _read_season, None)
+    season = optional("season", _read_season, None, as_of)
 
     codes = sorted(set(lines["code"]) | set(stock["code"]) | set(monthly["code"]))
     items = pd.DataFrame(index=pd.Index(codes, name="code"))
-    items["name"] = sale_names["name"].combine_first(ms_names).combine_first(st_names["name"]) \
-        .reindex(items.index)
-    items["unit"] = sale_names["unit"].combine_first(st_names["unit"]).reindex(items.index).fillna("шт")
-    items = items[items["name"].notna()]
+    items["name"] = (sale_names["name"].combine_first(ms_names["name"])
+                     .combine_first(st_names["name"]).reindex(items.index))
+    items["unit"] = (sale_names["unit"].combine_first(st_names["unit"]).combine_first(ms_names["unit"])
+                     .reindex(items.index).fillna("шт"))
+    items = items[items["name"].notna()].copy()
     items["name"] = items["name"].astype(str).str.strip()
+    items["supplier"] = supplier
+    items["moq_known"] = items.index.isin(moq_map.dropna().index)
     items["moq"] = moq_map.reindex(items.index).fillna(1).clip(lower=1)
-    items["article"] = articles.combine_first(moq_articles).reindex(items.index)
-    items["group"] = items.index.str[:4]
+    art = extra.get("article", pd.Series(dtype=str))
+    items["article"] = art.combine_first(moq_articles).reindex(items.index)
+    items["unit_cost"] = extra.get("unit_cost", pd.Series(dtype=float)).reindex(items.index)
+    if "category" in extra:
+        cat = extra["category"].reindex(items.index)
+        items["category_source"] = np.where(cat.notna(), "file", "abc")
+        items["category"] = cat.fillna(_abc(lines, items.index, as_of))
+    else:
+        items["category"] = _abc(lines, items.index, as_of)
+        items["category_source"] = "abc"
+
+    # срок поставки: из дат заказов в пути (медиана, взвешенная по количеству), иначе допущение
+    t = transit.dropna(subset=["order_date"])
+    if len(t):
+        days = (t["arrival_date"] - t["order_date"]).dt.days.to_numpy()
+        order = np.argsort(days)
+        cum = np.cumsum(t["qty"].to_numpy()[order])
+        lead = (int(days[order][np.searchsorted(cum, cum[-1] / 2)]), "из дат заказов в пути")
+    elif supplier in LEAD_ASSUMED:
+        lead = (LEAD_ASSUMED[supplier], "допущение")
+    else:
+        lead = (None, "допущение")
+
+    stock_current = extra.get("stock_current", pd.Series(dtype=float))
+    stock_current = stock_current[stock_current.index.isin(items.index)]
+    return dict(lines=lines, items=items.reset_index(), monthly=monthly, stock=stock,
+                stock_current=stock_current, transit=transit, lead=lead, season=season, as_of=as_of)
+
+
+def _supplier_dirs(raw: Path) -> list[tuple[Path, str]]:
+    subdirs = sorted(d for d in raw.iterdir() if d.is_dir())
+    with_sales = [d for d in subdirs if _find(d, SOURCES["sales"][0])]
+    if with_sales:
+        return [(d, SUPPLIER_NAMES.get(d.name, d.name)) for d in with_sales]
+    return [(raw, SUPPLIER_NAMES.get(raw.name, raw.name))]  # одна папка поставщика напрямую
+
+
+def _parse(raw: Path) -> Dataset:
+    if not raw.exists():
+        raise DataError(f"Нет папки с данными {raw}. Распакуйте архивы поставщиков в data/raw/<поставщик>/ "
+                        "или укажите путь в переменной DATA_DIR.")
+    warnings: list[str] = []
+    parts = []
+    for d, supplier in _supplier_dirs(raw):
+        try:
+            parts.append(_parse_supplier(d, supplier, warnings))
+        except DataError as e:
+            warnings.append(f"{supplier} пропущен: {e}")
+    if not parts:
+        raise DataError(warnings[-1].split("пропущен: ", 1)[-1] if warnings else
+                        f"В {raw} не найдено ни одного файла продаж.")
+
+    items = pd.concat([p["items"] for p in parts], ignore_index=True)
+    items = items.drop_duplicates("code")  # коды разных поставщиков не пересекаются; страховка
+    items["group"] = items["code"].str[:4]
     first_word = items["name"].str.split().str[0].str.strip('"«»,.')
     items["group_name"] = items["group"].map(
         first_word.groupby(items["group"]).agg(lambda x: x.value_counts().index[0]))
-    items["supplier"] = "ИЭК"
-
-    if company_season is None:
-        company_season = pd.Series(1.0, index=range(1, 13))
-    return Dataset(lines=lines, items=items.reset_index(), monthly_2024=monthly, stock=stock,
-                   transit=transit, company_season=company_season, as_of=lines["date"].max(),
-                   warnings=warnings)
+    flat = pd.Series(1.0, index=range(1, 13))
+    return Dataset(
+        lines=pd.concat([p["lines"] for p in parts], ignore_index=True),
+        items=items,
+        monthly_2024=pd.concat([p["monthly"] for p in parts], ignore_index=True),
+        stock=pd.concat([p["stock"] for p in parts], ignore_index=True),
+        stock_current=pd.concat([p["stock_current"] for p in parts]),
+        transit=pd.concat([p["transit"] for p in parts], ignore_index=True),
+        lead_default={p["items"]["supplier"].iat[0]: p["lead"] for p in parts if len(p["items"])},
+        supplier_season={p["items"]["supplier"].iat[0]: (p["season"] if p["season"] is not None else flat)
+                         for p in parts if len(p["items"])},
+        as_of=max(p["as_of"] for p in parts),
+        warnings=warnings)
 
 
 def load(raw: Path = RAW, use_cache: bool = True) -> Dataset:
     raw = Path(raw)
-    key = (CACHE_VERSION, str(raw), tuple(sorted((f.name, f.stat().st_size, f.stat().st_mtime_ns)
-                                                 for f in raw.glob("*.xlsx")))) if raw.exists() else None
+    key = (CACHE_VERSION, str(raw), tuple(sorted((str(f.relative_to(raw)), f.stat().st_size, f.stat().st_mtime_ns)
+                                                 for f in raw.rglob("*.xlsx")))) if raw.exists() else None
     cache_file = CACHE / "dataset.pkl"
     if use_cache and key and cache_file.exists():
         try:
