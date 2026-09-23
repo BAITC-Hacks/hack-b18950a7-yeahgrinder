@@ -4,10 +4,9 @@
 (в git не коммитим: данные партнёра):
 
 - `IEK.zip` → `data/raw/IEK/`
-- `Systeme electric.zip` → `data/raw/SE/`. **Имена файлов в архиве искажены** (macOS + CP866):
-  после распаковки переименовать, например так:
-  `python3 -c "import os,unicodedata;[os.rename(f,unicodedata.normalize('NFC',f).encode('mac_cyrillic').decode('cp866')) for f in os.listdir('.') if not f.isascii()]"`
-  (запускать внутри `data/raw/SE/`, папку `__MACOSX` не распаковывать).
+- `Systeme electric.zip` → `data/raw/SE/` (папку `__MACOSX` не распаковывать). Имена файлов
+  в архиве искажены (macOS + CP866) — **переименовывать не нужно**: если файл не нашёлся по имени,
+  загрузчик узнаёт его по заголовкам колонок.
 
 Загрузчик сам находит поставщиков по подпапкам и файлы — по началу имени.
 

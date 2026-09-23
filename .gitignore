@@ -8,3 +8,10 @@ IEK.zip
 *.zip
 data/raw/
 data/cache/
+data/processed/
+runs/
+*.sqlite*
+*.xlsx
+.env.*
+!.env.example
+.pytest_cache/

@@ -16,6 +16,12 @@ import pandas as pd
 
 from engine.load import Dataset
 
+ORDER_COLUMNS = ["code", "article", "name", "unit", "group", "group_name", "supplier", "category",
+                 "service_level", "base_month", "forecast_need", "safety_stock", "stock_now", "in_transit",
+                 "moq", "order_qty", "days_cover", "lead_days", "urgency", "reason", "n_oneoff", "lost_qty",
+                 "unit_cost", "order_value", "stock_source", "lead_source", "flags", "trend", "need",
+                 "horizon_days", "max_monthly_raw", "forecast_months"]
+
 MONTH_NAMES = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
 
 
@@ -33,6 +39,10 @@ class Params:
     service_by_category: dict[str, float] = field(default_factory=lambda: {
         "1": 0.98, "A": 0.98, "2": 0.95, "B": 0.95, "5": 0.95, "3": 0.90, "C": 0.90})
     no_auto_categories: tuple[str, ...] = ("7",)  # новинка/выведен — решает менеджер
+    lead_by_supplier: dict[str, int] | None = None  # срок по поставщику (what-if, API); важнее lead_days
+    codes: list[str] | None = None  # фильтр товаров (what-if по одному SKU)
+    clean_oneoffs: bool = True      # False — считать по сырым продажам (для сравнения в проверках)
+    restore_stockouts: bool = True  # False — не досчитывать спрос за месяцы без товара
     transit_override: dict[str, float] = field(default_factory=dict)  # code → qty в пути (для проверок)
 
 
@@ -109,7 +119,11 @@ def _sanitize(p: Params) -> Params:
                   groups=p.groups, suppliers=p.suppliers, transit_override=dict(p.transit_override),
                   service_by_category={k: float(min(max(v, 0.5), 0.999))
                                        for k, v in p.service_by_category.items()},
-                  no_auto_categories=tuple(p.no_auto_categories))
+                  no_auto_categories=tuple(p.no_auto_categories),
+                  lead_by_supplier=({k: int(min(max(v, 1), 365)) for k, v in p.lead_by_supplier.items()
+                                     if v is not None} if p.lead_by_supplier else None),
+                  codes=p.codes, clean_oneoffs=bool(p.clean_oneoffs),
+                  restore_stockouts=bool(p.restore_stockouts))
 
 
 def compute(ds: Dataset, p: Params = Params()) -> Result:
@@ -125,6 +139,8 @@ def compute(ds: Dataset, p: Params = Params()) -> Result:
         items = items[items["group"].isin(p.groups)]
     if p.suppliers:
         items = items[items["supplier"].isin(p.suppliers)]
+    if p.codes:
+        items = items[items.index.isin(p.codes)]
     codes = items.index
 
     # --- помесячные продажи: 2024 из месячного отчёта, 2025+ из накладных
@@ -136,8 +152,10 @@ def compute(ds: Dataset, p: Params = Params()) -> Result:
     raw = raw.combine_first(m24.pivot_table(index="code", columns="month", values="qty", aggfunc="sum"))
     raw = raw.reindex(index=codes, columns=months).fillna(0.0)
 
+    if not p.clean_oneoffs:
+        oneoffs = oneoffs.iloc[0:0]
     oo = oneoffs.assign(month=oneoffs["date"].dt.to_period("M").dt.to_timestamp(),
-                        excess=oneoffs["qty"] - oneoffs["typical"])
+                        excess=oneoffs["qty"])
     oneoff_m = (oo.pivot_table(index="code", columns="month", values="excess", aggfunc="sum")
                   .reindex(index=codes, columns=months).fillna(0.0))
 
@@ -156,7 +174,7 @@ def compute(ds: Dataset, p: Params = Params()) -> Result:
     raw_np, oneoff_np = raw.to_numpy(copy=True), oneoff_m.to_numpy(copy=True)
     y24 = months.year == 2024
     clean_np = raw_np - oneoff_np
-    for i in range(len(codes)):
+    for i in range(len(codes) if p.clean_oneoffs else 0):
         x = clean_np[i, :H]
         nz = x[x > 0]
         if len(nz) < 6:
@@ -200,6 +218,7 @@ def compute(ds: Dataset, p: Params = Params()) -> Result:
     f_hm = (future.year.to_numpy() - as_of.year) * 12 + f_month - as_of.month + 0.5
     f_dim = future.days_in_month.to_numpy().astype(float)
     f_dates = future.to_numpy()
+    f_ym = future.strftime("%Y-%m").to_numpy()
     fut_months = pd.date_range(cur_month, periods=6, freq="MS")
     idx_h = np.arange(H)
     y24h = y24[:H]
@@ -214,10 +233,12 @@ def compute(ds: Dataset, p: Params = Params()) -> Result:
             active = np.flatnonzero(raw_np[i, :H] > 0)
             flags = []
             sup = it["supplier"]
-            if code in lead_by_code.index:
-                lead, lead_src = int(lead_by_code[code]), "по заказу в пути"
+            if p.lead_by_supplier and sup in p.lead_by_supplier:
+                lead, lead_src = p.lead_by_supplier[sup], "из настроек"
             elif p.lead_days is not None:
                 lead, lead_src = p.lead_days, "из настроек"
+            elif code in lead_by_code.index:
+                lead, lead_src = int(lead_by_code[code]), "по заказу в пути"
             else:
                 d_lead, lead_src = ds.lead_default.get(sup, (None, "допущение"))
                 lead = int(d_lead) if d_lead else 30
@@ -244,7 +265,7 @@ def compute(ds: Dataset, p: Params = Params()) -> Result:
             zero_stock = (idx_h > first) & (st_row <= 0)
             in_stock = (idx_h >= first) & ~zero_stock
             out_of_stock = np.zeros(H, dtype=bool)
-            if zero_stock.any() and in_stock.sum() >= 3:
+            if p.restore_stockouts and zero_stock.any() and in_stock.sum() >= 3:
                 base_d = np.median(x[in_stock] / season[moy[in_stock]])
                 expected = base_d * season[moy]
                 out_of_stock = zero_stock & (x < 0.5 * expected)
@@ -278,6 +299,16 @@ def compute(ds: Dataset, p: Params = Params()) -> Result:
             daily = (level * np.minimum(growth_m ** f_hm[:horizon], 1.5) * season[m_h - 1] * uplift
                      / f_dim[:horizon])
             forecast_need = float(daily.sum())
+            ym = f_ym[:horizon]
+            fc_months = []
+            for label in dict.fromkeys(ym):
+                sel = ym == label
+                k = int(np.flatnonzero(sel)[0])
+                fc_months.append({"month": label, "days": int(sel.sum()),
+                                  "season": round(float(season[m_h[k] - 1]), 4),
+                                  "forecast": round(float(level * min(growth_m ** f_hm[k], 1.5)
+                                                          * season[m_h[k] - 1] * uplift), 3),
+                                  "horizon_qty": round(float(daily[sel].sum()), 3)})
             cat = str(it["category"]) if pd.notna(it["category"]) else ""
             z = z_by_cat.get(cat, z_default)
             svc = svc_by_cat.get(cat, p.service_level)
@@ -374,6 +405,9 @@ def compute(ds: Dataset, p: Params = Params()) -> Result:
                 "n_oneoff": n_oo, "lost_qty": round(float(lost.sum()), 1),
                 "unit_cost": cost, "order_value": round(order * cost, 2) if cost else None,
                 "stock_source": stock_src, "lead_source": lead_src, "flags": flags,
+                "trend": round(float(growth_m ** 6), 4), "need": round(float(need), 3),
+                "horizon_days": horizon, "max_monthly_raw": float(raw_np[i, :H].max()) if H else 0.0,
+                "forecast_months": fc_months,
             })
             hist_codes.append(code)
             hist_raw.append(raw_np[i, :H + 1])
@@ -406,11 +440,15 @@ def compute(ds: Dataset, p: Params = Params()) -> Result:
     if errors:
         warnings.append(f"Не удалось посчитать {len(errors)} товаров — они не попали в список")
 
+    if not rows:
+        return Result(orders=pd.DataFrame(columns=ORDER_COLUMNS), history=history,
+                      oneoffs=oneoffs[["date", "doc", "code", "qty", "threshold", "typical"]].reset_index(drop=True),
+                      warnings=warnings, errors=errors)
     orders = pd.DataFrame(rows)
     rank = {"критично": 0, "высокая": 1, "плановая": 2, "не нужно": 3}
     orders = orders.sort_values(["supplier", "urgency", "order_qty"],
                                 key=lambda s: s.map(rank) if s.name == "urgency" else s,
                                 ascending=[True, True, False]).reset_index(drop=True)
     return Result(orders=orders, history=history,
-                  oneoffs=oneoffs[["date", "doc", "code", "qty", "threshold"]].reset_index(drop=True),
+                  oneoffs=oneoffs[["date", "doc", "code", "qty", "threshold", "typical"]].reset_index(drop=True),
                   warnings=warnings, errors=errors)

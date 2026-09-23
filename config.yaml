@@ -1,0 +1,15 @@
+as_of: 2026-09-22
+history_months: 18
+review_days: 30
+lead_time_days:        # null — из данных: ИЭК по датам заказов в пути, SE — допущение 45 дн.
+  IEK: null
+  Systeme Electric: null
+service_z: null        # null — по категории товара (1/A 98%, 2/B/5 95%, 3/C 90%)
+outlier: {k_mad: 3.5, min_ratio: 2.0, min_abs: 20, line_share: 0.5}
+stockout: {low_stock_ratio: 0.25, sales_drop_ratio: 0.5}
+trend_clip: [0.7, 1.5]
+ai:
+  primary_provider: openai
+  critic_provider: nvidia
+  enable_nvidia_critic: true
+  critic_only_flagged: true

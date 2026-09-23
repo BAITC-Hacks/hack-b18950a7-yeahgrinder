@@ -21,9 +21,14 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
+try:  # DATA_DIR можно задать в .env
+    from dotenv import load_dotenv
+    load_dotenv(ROOT / ".env")
+except ImportError:
+    pass
 RAW = Path(os.environ.get("DATA_DIR", ROOT / "data" / "raw"))
 CACHE = ROOT / "data" / "cache"
-CACHE_VERSION = 5  # поднять при изменении формата Dataset
+CACHE_VERSION = 6  # поднять при изменении формата Dataset
 
 SUPPLIER_NAMES = {"IEK": "ИЭК", "SE": "Systeme Electric"}
 # срок поставки, если его нельзя вывести из дат заказов в пути (допущение, видно в обосновании)
@@ -314,8 +319,27 @@ def _abc(lines: pd.DataFrame, codes: pd.Index, as_of: pd.Timestamp) -> pd.Series
 
 # ---------------------------------------------------------------- поставщик целиком
 
+# вид файла по заголовкам (распознавание Алдияра, engine/loader.py) → ключ SOURCES
+DISCOVER_KINDS = {"sales_lines": "sales", "sales_monthly": "monthly", "stock_monthly": "stock",
+                  "transit": "transit", "moq": "moq", "seasonality": "season"}
+
+
+def _discover(raw: Path, warnings: list[str], supplier: str) -> dict[str, Path]:
+    """Файлы, не найденные по имени, ищем по заголовкам — имена в архиве бывают искажены."""
+    from engine.loader import discover  # openpyxl read-only, читает только первые строки листов
+    try:
+        found = discover(raw)
+    except Exception as e:
+        warnings.append(f"{supplier}: не удалось распознать файлы по заголовкам: {e}")
+        return {}
+    return {DISCOVER_KINDS[k]: v[0] for k, v in found.items() if k in DISCOVER_KINDS}
+
+
 def _parse_supplier(raw: Path, supplier: str, warnings: list[str]):
     paths = {k: _find(raw, pats) for k, (pats, _, _) in SOURCES.items()}
+    if any(v is None for v in paths.values()):
+        for k, path in _discover(raw, warnings, supplier).items():
+            paths[k] = paths[k] or path
 
     def optional(key, reader, default, *args):
         pats, what, fallback = SOURCES[key]
@@ -387,9 +411,15 @@ def _parse_supplier(raw: Path, supplier: str, warnings: list[str]):
                 stock_current=stock_current, transit=transit, lead=lead, season=season, as_of=as_of)
 
 
+def _has_sales(d: Path) -> bool:
+    if _find(d, SOURCES["sales"][0]):
+        return True
+    return any(f.suffix == ".xlsx" for f in d.iterdir()) and "sales" in _discover(d, [], d.name)
+
+
 def _supplier_dirs(raw: Path) -> list[tuple[Path, str]]:
     subdirs = sorted(d for d in raw.iterdir() if d.is_dir())
-    with_sales = [d for d in subdirs if _find(d, SOURCES["sales"][0])]
+    with_sales = [d for d in subdirs if _has_sales(d)]
     if with_sales:
         return [(d, SUPPLIER_NAMES.get(d.name, d.name)) for d in with_sales]
     return [(raw, SUPPLIER_NAMES.get(raw.name, raw.name))]  # одна папка поставщика напрямую

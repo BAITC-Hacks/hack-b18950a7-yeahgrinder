@@ -1,3 +1,45 @@
+# Слияние с веткой `backend` (Алдияр) — один расчёт на весь проект
+
+Ветка `backend` влита в `main`, сама ветка сохранена. Раньше в проекте было два движка с разными
+цифрами (коробка SE: 226 800 в интерфейсе против 7 200 в чате). Теперь **все количества считает
+`engine/calc.py`**, а сервис, API и агент Алдияра получают их через мост `engine/run.py`.
+
+**Что где:**
+
+| Файл | Что делает |
+|---|---|
+| `engine/load.py` + `engine/calc.py` | загрузка и расчёт (как в c31f394 + поля для агента) |
+| `engine/run.py` | **мост**: `compute(ds, Params, rules)` в схеме `OrderLine` (pydantic) для сервиса/API/агента; `agent_tables(ds)` — таблицы для SQL-инструмента агента |
+| `engine/models.py`, `engine/validate.py` | контракты Алдияра без изменений, кроме двух полей ниже |
+| `engine/loader.py` | от него используется только распознавание файлов по заголовкам |
+| `service.py`, `api.py`, `agent/`, `export/` | код Алдияра; снимок данных расчёта теперь `runs/<id>/dataset.pkl` |
+| удалены | `engine/anomalies.py`, `forecast.py`, `prepare.py`, `replenish.py`, `explain.py`, `compat.py`, `tests/test_compat.py` (остались в ветке `backend`) |
+
+**Для агентов, которые пишут код:**
+- Интерфейс (`app.py`) — `from engine.calc import Params, compute`, `from engine.load import load`.
+  Сервис/API/агент — `from engine.run import compute` + `engine.models.Params`. Цифры одинаковые.
+- `engine.models.Params.lead_time_days` теперь `{"IEK": None, "Systeme Electric": None}` —
+  `None` = срок из данных (ИЭК 24 дн. по заказам в пути, SE 45 дн. допущение); число — переопределение.
+- `engine.models.Params.service_z` теперь `None` = уровень сервиса по категории (1/A 98%, 2/B/5 95%,
+  3/C 90%); число — один z для всех. В `config.yaml` оба поля `null`.
+- Поставщики в API/агенте — `IEK` и `Systeme Electric`; в `engine/calc.py` и интерфейсе — `ИЭК` и
+  `Systeme Electric`. Перевод — `engine.run.SUPPLIER_OUT` / `SUPPLIER_IN`.
+- `excluded_events` у строки: `type` (`ONE_OFF_INVOICE` / `STAT_SPIKE`), `month`, `date`,
+  `doc_no`, `invoice_qty`, `clean_qty`, `excluded_qty`, `threshold`.
+  `restored_events`: `month`, `raw_qty`, `qty` (досчитано), `clean_qty`.
+- Разовая строка теперь **исключается целиком** (раньше — заменялась типичной строкой).
+- Файлы SE переименовывать не нужно — распознаются по заголовкам.
+- `requirements.txt` — версии Алдияра (pandas 2.x), кроме `altair>=6,<7`: altair 5 не работает на
+  Python 3.14. После `git pull` — `.venv/bin/pip install -r requirements.txt`.
+
+**Скорость:** сервис на реальных данных — 3,9 с на расчёт (раньше 54 с), what-if по товару — 0,2 с.
+**Тесты:** 29, все зелёные. Must-have тесты Алдияра перенесены на этот расчёт (сценарии меняют
+накладные, а не месячный отчёт — спрос берётся из накладных) и дополнены: остаток, прирост,
+категория, регулярный крупный покупатель.
+**README** переписан в части методологии, алгоритма выбросов, данных и допущений под реальный расчёт.
+
+---
+
 # Что изменилось: 353389d → c31f394
 
 Коротко: движок теперь считает **двух поставщиков** (ИЭК и Systeme Electric), учитывает
