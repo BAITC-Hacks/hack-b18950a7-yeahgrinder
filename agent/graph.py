@@ -93,6 +93,25 @@ class Brief(BaseModel):
     notes: list[str] = Field(default_factory=list, max_length=3)
 
 
+FLAG_MEANINGS = {
+    "STOCK_ESTIMATED": "остаток оценочный: приходы текущего месяца в выгрузке не видны, сверить с 1С",
+    "MOQ_MISSING": "кратности нет в справочнике — заказ округлён до 1, кратность стоит уточнить",
+    "MOQ_ROUNDED": "количество округлено вверх до кратности поставщика",
+    "MOQ_OVERSHOOT": "округление до кратности добавило больше 50% к потребности",
+    "ONE_OFF_INVOICE": "разовая крупная продажа исключена из регулярного спроса",
+    "STAT_SPIKE": "аномальный месяц исключён из регулярного спроса",
+    "STOCKOUT_RESTORED": "досчитан спрос за месяцы, когда товара не было на складе",
+    "SEASON_PEAK": "в горизонте заказа сезонный пик",
+    "TREND_UP": "устойчивый рост спроса", "TREND_DOWN": "устойчивый спад спроса",
+    "NO_DEMAND": "за 12 месяцев продаж нет — не заказываем",
+    "SHORT_HISTORY": "короткая история продаж — прогноз менее надёжен",
+    "LEAD_ASSUMED": "срок поставки — допущение, дат заказов нет",
+    "SANITY_HIGH": "заказ заметно больше обычных продаж — проверить вручную",
+    "CATEGORY_NO_AUTO": "новинка или выведенный товар — решает менеджер",
+    "MANAGER_RULE": "применено правило менеджера", "MANAGER_EDIT": "количество изменено менеджером",
+}
+
+
 def explain_run(service, run_id: str, supplier: str, model=None) -> dict:
     """Explainer: short structured summary per supplier from aggregates only (not all rows)."""
     model = model or chat_model()
@@ -100,9 +119,17 @@ def explain_run(service, run_id: str, supplier: str, model=None) -> dict:
         raise AgentUnavailable("Сводка LLM выключена: нет OPENAI_API_KEY")
     result = service.get_result(run_id)
     part = result.orders[result.orders.supplier == supplier]
-    top = part[part.urgency == "CRITICAL"].nlargest(5, "recommended_qty")[["sku", "recommended_qty", "unit", "cover_days"]]
+    critical = part[part.urgency == "CRITICAL"]
+    bare = critical[critical.in_transit_in_horizon <= 0]
+    important = bare[bare.category.isin(["A", "1"])] if "category" in bare else bare.iloc[0:0]
+    top = (important if len(important) else bare).nlargest(5, "recommended_qty")[
+        [c for c in ["name", "recommended_qty", "unit", "cover_days", "category"] if c in part]]
+    if "cover_days" in top:
+        top = top.assign(cover_days=top.cover_days.round())
+    flags = part.reason_codes.explode().value_counts().head(10).to_dict()
     facts = {"summary": [s for s in result.summary if s["supplier"] == supplier],
-             "flags": part.reason_codes.explode().value_counts().head(10).to_dict(),
+             "critical_without_transit": int(len(bare)), "important_critical_without_transit": int(len(important)),
+             "flags": flags, "flag_meanings": {k: FLAG_MEANINGS[k] for k in flags if k in FLAG_MEANINGS},
              "top_critical": top.to_dict("records"), "warnings": result.warnings}
     brief = model.with_structured_output(Brief).invoke(
         [("system", EXPLAINER_PROMPT), ("user", json.dumps(facts, ensure_ascii=False, default=str))])

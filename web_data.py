@@ -97,6 +97,7 @@ def _clean(v):
 
 def _products(res, growth, ds) -> list[dict]:
     hist = {k: g for k, g in res.history.groupby("sku")}
+    transit = {k: g for k, g in ds.transit.groupby("code")}
     g = growth.orders.set_index("sku")
     out = []
     for o in res.orders.to_dict("records"):
@@ -126,6 +127,17 @@ def _products(res, growth, ds) -> list[dict]:
             "lost_qty": round(sum(e["qty"] for e in o["restored_events"]), 1),
             "restored_text": _restored_text(o["restored_events"], unit),
             "history": rows, "history_label": label,
+            # для раскрытия строк разбора в карточке
+            "forecast_months": [{"month": m["month"], "days": m["days"], "season": round(m["season"], 2),
+                                 "forecast": round(m["forecast"], 1), "horizon_qty": round(m["horizon_qty"], 1)}
+                                for m in o["forecast_months"]],
+            "transit_lines": [{"doc": str(t.doc), "qty": float(t.qty),
+                               "eta": pd.Timestamp(t.arrival_date).strftime("%d.%m.%Y"),
+                               "in_horizon": bool(pd.Timestamp(t.arrival_date) <= ds.as_of + pd.Timedelta(days=int(o["horizon_days"])))}
+                              for t in transit[sku].itertuples()] if sku in transit else [],
+            "stock_source": o["stock_source"], "lead_source": o["lead_source"],
+            "service_level": o["service_level"], "base_monthly": round(o["base_monthly"], 1),
+            "trend": o["trend"],
             "growthScenario": {"forecast_horizon": round(float(g.at[sku, "forecast_horizon"]), 1),
                                "recommended_qty": int(g.at[sku, "recommended_qty"])} if sku in g.index else
                               {"forecast_horizon": round(o["forecast_horizon"], 1), "recommended_qty": o["recommended_qty"]},
