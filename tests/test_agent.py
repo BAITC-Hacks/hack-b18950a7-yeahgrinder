@@ -89,3 +89,10 @@ def test_critic_is_optional_and_parsed():
 
 def test_number_check_accepts_rounding_and_spaces():
     assert check_numbers("Заказ 1 440 шт., база 312 шт./мес", ['{"qty": 1440, "base": 311.8}']) == []
+
+
+def test_numbers_from_question_are_not_flagged(run):
+    service, result = run
+    model = ScriptedModel([AIMessage("Если срок поставки 60 дней, заказ станет больше.")])
+    reply = ask(service, result.run_id, "Что будет при сроке поставки 60 дней?", "t3", model=model, use_critic=False)
+    assert reply["numbers_ok"]
