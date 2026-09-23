@@ -7,7 +7,12 @@ function crc32(bytes) {
   return (crc ^ 0xffffffff) >>> 0;
 }
 function header(size) { const bytes = new Uint8Array(size); return [bytes, new DataView(bytes.buffer)]; }
-export function buildWorkbook(rows) {
+const sheetXml = (data, widths) => `<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols>${widths.map((w,i)=>`<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`).join('')}</cols><sheetData>${data.map((row,i)=>`<row r="${i+1}">${row.map((v,j)=>{
+    const ref = `${String.fromCharCode(65+j)}${i+1}`;
+    return typeof v === 'number' ? `<c r="${ref}"><v>${v}</v></c>` : `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${xml(v)}</t></is></c>`;
+  }).join('')}</row>`).join('')}</sheetData></worksheet>`;
+// meta = {by, at}: кто и когда утвердил — отдельным листом, лист «Заказ» остаётся чистым для импорта в 1С
+export function buildWorkbook(rows, meta = {}) {
   const columns = ['Код 1С','Артикул','Наименование','Ед.','Количество','Поставщик','Срочность'];
   const data = [columns, ...rows];
   const sheet = data.map((row,i)=>`<row r="${i+1}">${row.map((v,j)=>{
@@ -15,12 +20,14 @@ export function buildWorkbook(rows) {
     return typeof v === 'number' ? `<c r="${ref}"><v>${v}</v></c>` : `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${xml(v)}</t></is></c>`;
   }).join('')}</row>`).join('');
   const files = {
-    '[Content_Types].xml':'<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>',
+    '[Content_Types].xml':`<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>${meta.by?'<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>':''}</Types>`,
     '_rels/.rels':'<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
-    'xl/workbook.xml':'<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Заказ" sheetId="1" r:id="rId1"/></sheets></workbook>',
-    'xl/_rels/workbook.xml.rels':'<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+    'xl/workbook.xml':`<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Заказ" sheetId="1" r:id="rId1"/>${meta.by?'<sheet name="Утверждение" sheetId="2" r:id="rId2"/>':''}</sheets></workbook>`,
+    'xl/_rels/workbook.xml.rels':`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>${meta.by?'<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>':''}</Relationships>`,
     'xl/worksheets/sheet1.xml':`<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols><col min="1" max="2" width="24" customWidth="1"/><col min="3" max="3" width="55" customWidth="1"/><col min="4" max="7" width="23" customWidth="1"/></cols><sheetData>${sheet}</sheetData><autoFilter ref="A1:G${data.length}"/></worksheet>`,
   };
+  if (meta.by) files['xl/worksheets/sheet2.xml'] = sheetXml([['Утвердил', meta.by], ['Дата и время', new Date(meta.at).toLocaleString('ru-RU')],
+    ['Позиций', rows.length], ['Отправка поставщику', 'нет — файл для загрузки в 1С']], [24, 44]);
   const parts=[], central=[]; let offset=0, centralLength=0;
   for(const [name,content] of Object.entries(files)) {
     const n=enc.encode(name), b=enc.encode(content), crc=crc32(b);

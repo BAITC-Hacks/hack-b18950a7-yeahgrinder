@@ -1,5 +1,5 @@
-// Fixed demo fixtures. These are not results from a connected calculation engine.
-export const demo = { asOf: '2026-09-22', version: 2, horizon: 60, reviewDays: 30 };
+// Demo fixtures — fallback, если API недоступен. Основной источник — /ui/data (см. dataProvider внизу).
+export const demo = { asOf: '2026-09-22', version: 2, horizon: 60, reviewDays: 30, live: false };
 export const suppliers = ['IEK', 'Systeme Electric'];
 export const urgency = {
   CRITICAL: { label: 'Критично', className: 'critical', rank: 0 },
@@ -43,7 +43,26 @@ export const sources = [
   {name:'Товары в пути',type:'Ожидаемые поступления',date:'22.09.2026',status:'Демо-источник',description:'В карточках показан транзит, учитываемый в горизонте заказа.'},
   {name:'MOQ и кратность',type:'Условия заказа',date:'22.09.2026',status:'Демо-источник',description:'В наборе заполнено для всех товаров. Кабель заказывается бухтами по 305 м.'},
 ];
+// Реальные данные: /ui/data (api.py → web_data.py → engine). Если API недоступен — демо-набор выше.
+let live = null;
+async function loadLive() {
+  if (live) return live;
+  live = (async () => {
+    try {
+      const res = await fetch('./ui/data', { headers: { Accept: 'application/json' } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      Object.assign(demo, { asOf: data.meta.asOf, reviewDays: data.meta.reviewDays, live: true,
+        leadText: data.meta.leadText, orderValue: data.meta.orderValue, warnings: data.meta.warnings });
+      return data;
+    } catch (error) {
+      demo.live = false; demo.liveError = String(error.message || error);
+      return { products, sources };
+    }
+  })();
+  return live;
+}
 export const dataProvider = {
-  async getProducts() { return products; },
-  async getSources() { return sources; },
+  async getProducts() { return (await loadLive()).products; },
+  async getSources() { return (await loadLive()).sources; },
 };
