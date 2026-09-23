@@ -319,3 +319,18 @@ td.product .product-open strong{display:-webkit-box;-webkit-line-clamp:2;-webkit
 .admin-list li{font-size:13px;color:#33445b;background:#f8fafd;border:1px solid #eef2f7;border-radius:10px;padding:8px 10px}
 .admin-list li small{display:block;font-size:11px;color:#8a98ab;margin-top:2px}
 @media (max-width:760px){.bt-head{flex-direction:column}.bt-num{align-self:stretch}}
+
+/* --- ответы помощника --- */
+.ans{display:grid;gap:8px;font-size:13.5px;line-height:1.6;color:#2c3d54}
+.ans p{margin:0}
+.ans .ans-lead{font-size:14.5px;font-weight:600;color:#1d2b3e;padding:10px 12px;border-radius:10px;background:#eef4ff;border-left:3px solid #3b82f6}
+.ans .ans-h{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#6d5bd0;margin-top:6px}
+.ans .ans-list{margin:0;padding:0;list-style:none;display:grid;gap:6px}
+.ans .ans-list li{position:relative;padding:7px 10px 7px 26px;border-radius:9px;background:#fff;border:1px solid #e8eef6}
+.ans .ans-list li:before{content:'';position:absolute;left:11px;top:14px;width:6px;height:6px;border-radius:50%;background:#7aa5ee}
+.ans .ans-step{display:grid;grid-template-columns:22px 1fr;gap:8px;align-items:start}
+.ans .ans-step span{width:22px;height:22px;border-radius:7px;background:#eef4ff;color:#2869c9;font-size:11px;font-weight:700;display:grid;place-items:center}
+.ans .ans-num{font-weight:650;color:#1f6b47;background:#edf8f1;border-radius:5px;padding:0 4px}
+.ans .ans-link{border:0;background:none;padding:0;font:inherit;color:#2869c9;text-decoration:underline dotted;cursor:pointer;text-align:left}
+.ans .ans-link:hover{color:#1c4fa0}
+.msg.bot .ans{color:#2c3d54}

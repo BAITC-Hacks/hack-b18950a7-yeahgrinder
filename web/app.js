@@ -297,7 +297,7 @@ function askBody(p){
  if(!demo.aiChat)return `<div class="notice"><div>${icon('info')}</div><div><strong>Помощник выключен</strong>Не задан ключ API языковой модели. Расчёт, рекомендации, «что если» и экспорт работают без него. Чтобы включить — добавьте OPENAI_API_KEY в .env и перезапустите сервер.</div></div>`;
  const c=chats[p.id]||{};const hist=c.history||[];
  const qs=[`Почему по этому товару рекомендовано ${fmt(p.recommended_qty)} ${p.unit}?`,'Что будет, если поставка задержится на 2 недели?',`Какие ещё критичные позиции ${p.supplier} без товара в пути?`];
- const thread=hist.length||c.loading?`<div class="ask-thread">${hist.map(t=>`<div class="ask-q">${esc(t.q)}</div>${t.error?`<div class="notice">${esc(t.error)}</div>`:`<div class="ask-answer"><div class="ask-check ${t.numbers_ok?'ok':'warn'}">${t.numbers_ok?'✓ Числа сверены с расчётом':'⚠ Есть числа не из данных: '+esc((t.unsupported||[]).join(', '))}</div><div class="ask-text">${esc(t.answer).replace(/\n/g,'<br>')}</div></div>`}`).join('')}${c.loading?`<div class="ask-q">${esc(c.pending)}</div><div class="ask-answer ask-pending">Думаю…</div>`:''}</div>`:'';
+ const thread=hist.length||c.loading?`<div class="ask-thread">${hist.map(t=>`<div class="ask-q">${esc(t.q)}</div>${t.error?`<div class="notice">${esc(t.error)}</div>`:`<div class="ask-answer"><div class="ask-check ${t.numbers_ok?'ok':'warn'}">${t.numbers_ok?'✓ Числа сверены с расчётом':'⚠ Есть числа не из данных: '+esc((t.unsupported||[]).join(', '))}</div><div class="ask-text">${renderAnswer(t.answer)}</div></div>`}`).join('')}${c.loading?`<div class="ask-q">${esc(c.pending)}</div><div class="ask-answer ask-pending">Думаю…</div>`:''}</div>`:'';
  return `<div class="ask">${thread}<div class="ask-suggest">${qs.map(q=>`<button class="chip" data-action="ask-fill" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div><textarea id="ask-input" maxlength="2000" placeholder="${hist.length?'Уточните или задайте следующий вопрос…':'Спросите о расчёте по этому товару…'}">${esc(c.draft||'')}</textarea><div class="ask-actions">${btn(c.loading?'Думаю…':'Спросить','ask-send','primary',c.loading?'disabled':'')}</div><div class="context-note">${icon('info')} Помощник отвечает только по результатам расчёта и не может отправить заказ поставщику.</div></div>`;
 }
 
@@ -331,10 +331,52 @@ function pageContext(){
   'Товары':'Экран «Товары»: весь каталог.','Данные':'Экран «Данные»: источники данных и допущения расчёта.'}[state.page]||'';
  return c?`[Контекст: ${c}]`:'';
 }
+
+// --- ответ помощника: лёгкая разметка → HTML, названия товаров → ссылки на карточку
+function productLinker(){
+ if(productLinker.cache&&productLinker.n===allProducts.length)return productLinker.cache;
+ const norm=t=>t.toLowerCase().replace(/\s+/g,' ').trim();
+ productLinker.cache={norm,list:allProducts.map(p=>[norm(p.name),p]).filter(([n])=>n.length>=10)};productLinker.n=allProducts.length;return productLinker.cache;
+}
+function linkProducts(html){
+ // название товара в пункте списка — всё до « — » (или до конца); ищем товар, чьё имя начинается с него
+ const {norm,list}=productLinker();if(!list.length)return html;
+ const m=html.match(/^(.{10,160}?)(\s[—–-]\s|:|$)/);if(!m)return html;
+ const frag=m[1].replace(/<[^>]+>/g,''), key=norm(frag.replace(/&quot;/g,'"').replace(/&amp;/g,'&'));
+ if(key.length<10)return html;
+ let best=null;
+ for(const [n,p] of list){ if(n.startsWith(key)||key.startsWith(n)){ if(!best||Math.abs(n.length-key.length)<Math.abs(best[0].length-key.length))best=[n,p]; } }
+ if(!best)return html;
+ return `<button class="ans-link" data-action="product" data-id="${esc(best[1].id)}">${m[1]}</button>`+html.slice(m[1].length);
+}
+function renderAnswer(text){
+ const lines=String(text||'').replace(/\r/g,'').split('\n');
+ const out=[];let list=null;
+ const inline=t=>{let h=esc(t);
+  h=h.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+  h=h.replace(/(\d[\d  ]*[.,]?\d*)\s?(шт|м|упак|компл|дн\.?|дней|дня|день|%|₸)(?=[\s.,;:)—–-]|$)/g,'<b class="ans-num">$1 $2</b>');
+  return linkProducts(h);};
+ const flush=()=>{if(list){out.push(`<ul class="ans-list">${list.join('')}</ul>`);list=null;}};
+ for(const raw of lines){
+  const l=raw.trim();
+  if(!l){flush();continue;}
+  const m=l.match(/^[-•*]\s+(.*)$/);
+  if(m){(list??=[]).push(`<li>${inline(m[1])}</li>`);continue;}
+  flush();
+  const h=l.match(/^\*\*(.+?)\*\*:?$/)||l.match(/^(.{2,40}):$/);
+  if(h&&!/\d/.test(h[1])){out.push(`<div class="ans-h">${esc(h[1])}</div>`);continue;}
+  const num=l.match(/^(\d+)[.)]\s+(.*)$/);
+  if(num){out.push(`<div class="ans-step"><span>${num[1]}</span><div>${inline(num[2])}</div></div>`);continue;}
+  out.push(`<p>${inline(l)}</p>`);
+ }
+ flush();
+ if(out.length&&out[0].startsWith('<p>'))out[0]=out[0].replace('<p>','<p class="ans-lead">');
+ return `<div class="ans">${out.join('')}</div>`;
+}
 function renderAssistant(){
  let d=$('#assistant-dialog');
  if(!d){d=document.createElement('dialog');d.id='assistant-dialog';d.className='assistant-dialog';document.body.append(d);}
- const body=demo.aiChat===undefined?'<div class="ai-loading"><i></i><i></i><i></i> Проверяем помощника…</div>':!demo.aiChat?aiOff():`${ai.log.length?'':`<div class="ask-suggest">${assistantSuggestions().map(q=>`<button class="chip" data-action="assistant-fill" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>`}<div class="assistant-log">${ai.log.map(m=>m.role==='user'?`<div class="msg user">${esc(m.text)}</div>`:`<div class="msg bot">${m.error?`<span class="cover-none">${esc(m.error)}</span>`:`<div class="ask-check ${m.numbers_ok?'ok':'warn'}">${m.numbers_ok?'✓ Числа сверены с расчётом':'⚠ Есть числа не из данных: '+esc((m.unsupported||[]).join(', '))}</div>${esc(m.text).replace(/\n/g,'<br>')}`}</div>`).join('')}${ai.busy?'<div class="msg bot"><div class="ai-loading"><i></i><i></i><i></i> Думаю…</div></div>':''}</div><div class="assistant-input"><textarea id="assistant-input" maxlength="2000" placeholder="Спросите о закупках, остатках, рисках…"></textarea>${btn('Отправить','assistant-send','primary',ai.busy?'disabled':'')}</div>`;
+ const body=demo.aiChat===undefined?'<div class="ai-loading"><i></i><i></i><i></i> Проверяем помощника…</div>':!demo.aiChat?aiOff():`${ai.log.length?'':`<div class="ask-suggest">${assistantSuggestions().map(q=>`<button class="chip" data-action="assistant-fill" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>`}<div class="assistant-log">${ai.log.map(m=>m.role==='user'?`<div class="msg user">${esc(m.text)}</div>`:`<div class="msg bot">${m.error?`<span class="cover-none">${esc(m.error)}</span>`:`<div class="ask-check ${m.numbers_ok?'ok':'warn'}">${m.numbers_ok?'✓ Числа сверены с расчётом':'⚠ Есть числа не из данных: '+esc((m.unsupported||[]).join(', '))}</div>${renderAnswer(m.text)}`}</div>`).join('')}${ai.busy?'<div class="msg bot"><div class="ai-loading"><i></i><i></i><i></i> Думаю…</div></div>':''}</div><div class="assistant-input"><textarea id="assistant-input" maxlength="2000" placeholder="Спросите о закупках, остатках, рисках…"></textarea>${btn('Отправить','assistant-send','primary',ai.busy?'disabled':'')}</div>`;
  d.innerHTML=`<div class="modal-heading"><div><span class="ai-badge">ИИ</span> <strong>Помощник закупщика</strong><div class="card-sub">Отвечает по результатам расчёта. Заказы не отправляет.</div></div><button class="icon-btn" data-action="assistant-close" aria-label="Закрыть">${icon('close')}</button></div>${body}`;
  const log=d.querySelector('.assistant-log');if(log)log.scrollTop=log.scrollHeight;
  return d;
