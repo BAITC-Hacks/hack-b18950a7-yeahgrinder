@@ -16,3 +16,7 @@ runs/
 !.env.example
 .pytest_cache/
 .playwright-mcp/
+
+# Local OS metadata and generated test reports
+.DS_Store
+reports/

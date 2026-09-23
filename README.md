@@ -14,6 +14,13 @@ NVIDIA (опц.)    независимая проверка ответов ча�
 
 Без ключей API работает всё, кроме чата: расчёт, интерфейс, утверждение, экспорт.
 
+Интерфейс QadamSupply: [возможности и файлы frontend](web/README.md).
+
+Проверка проекта с двумя ZIP: [инструкция для участника команды](docs/TESTING.md).
+```bash
+.venv/bin/python scripts/test_project.py --iek-zip "/путь/IEK (1).zip" --se-zip "/путь/Systeme electric (1).zip"
+```
+
 ## Запуск
 
 ```bash
@@ -129,7 +136,7 @@ cp .env.example .env          # ключи AI — по желанию
 Дополнительно: неполный месяц не влияет на заказ, путь после горизонта не вычитается, редкий спрос
 не обнуляется, «нет спроса» не заказывается даже с правилом менеджера, горизонт считается по дням;
 сервис, API и агент (`tests/test_service.py`, `tests/test_api.py`, `tests/test_agent.py`).
-Все 29 тестов — `.venv/bin/python -m pytest -q`.
+Быстрые тесты — `.venv/bin/python scripts/test_project.py`; полный прогон с реальными архивами описан в [docs/TESTING.md](docs/TESTING.md).
 
 ## Утверждение и экспорт
 
@@ -177,10 +184,10 @@ LangGraph: модель ⇄ инструменты, не больше 6 шаго
 ## Структура
 
 ```text
-web/              интерфейс QadamSupply (JS, без сборки) — данные из /ui/data
-web_data.py       адаптер расчёта для web/
+web/              интерфейс QadamSupply (JS, без сборки), данные из /ui/data
+web_data.py       адаптер расчёта для frontend
 app.py            запасной Streamlit-интерфейс
-api.py            FastAPI: API сервиса + страница web/
+api.py            FastAPI: API сервиса + frontend (статические файлы только из web/)
 service.py        общий сервис: расчёт, хранение, решения, экспорт, what-if
 config.yaml       параметры расчёта и AI
 engine/load.py    загрузка выгрузок 1С по поставщикам, кэш, оговорки при битых файлах

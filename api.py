@@ -172,4 +172,3 @@ def ui_data(growth_pct: float = Query(20.0, ge=-50, le=100)):
 
 if WEB.exists():  # последним: иначе перехватит маршруты API
     app.mount("/", StaticFiles(directory=WEB, html=True), name="web")
-
