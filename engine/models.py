@@ -89,6 +89,14 @@ class OrderLine(Model):
     restored_events: list[dict] = Field(default_factory=list)
     forecast_months: list[dict] = Field(default_factory=list)
     flags: list[str] = Field(default_factory=list)
+    # для интерфейса (необязательные — старые расчёты без них тоже валидны)
+    group_name: str | None = None
+    category: str | None = None          # SE: 1/2/3/5/7 из файла менеджера; ИЭК: A/B/C
+    service_level: float | None = None   # уровень сервиса, применённый к товару
+    unit_cost: float | None = None       # себестоимость, ₸ (только SE)
+    order_value: float | None = None     # сумма заказа, ₸ (только SE)
+    stock_source: str | None = None      # «из выгрузки» | «оценка»
+    lead_source: str | None = None       # «по заказу в пути» | «из дат заказов в пути» | «из настроек» | «допущение»
 
     @model_validator(mode="after")
     def multiple(self):

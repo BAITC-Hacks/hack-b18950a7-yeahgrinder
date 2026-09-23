@@ -2,7 +2,12 @@
 from functools import lru_cache
 from typing import Literal
 
+from pathlib import Path
+import threading
+
 from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from agent.graph import AgentUnavailable, ask, explain_run
@@ -10,8 +15,11 @@ from agent.providers import status as ai_status
 from engine.load import DataError
 from engine.models import Params, Supplier, Urgency
 from service import ProcurementService
+import web_data
 
 app = FastAPI(title="Procurement Copilot API", version="1.0")
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+WEB = Path(__file__).resolve().parent / "web"
 
 
 @lru_cache
@@ -146,3 +154,22 @@ def brief(run_id: str, supplier: Supplier):
         return guarded(explain_run, service(), run_id, supplier)
     except AgentUnavailable as exc:
         raise HTTPException(503, str(exc)) from exc
+
+
+# ---------------------------------------------------------------- веб-интерфейс (web/, SupplyAI)
+
+@app.on_event("startup")
+def warm_ui_cache():
+    # первый расчёт для интерфейса ~12 с — греем в фоне, чтобы первый заход не ждал
+    threading.Thread(target=lambda: guarded(web_data.payload), daemon=True).start()
+
+
+@app.get("/ui/data")
+def ui_data(growth_pct: float = Query(20.0, ge=-50, le=100)):
+    """Товары, источники и сводка в форме web/mockDashboard.js — из того же расчёта, что /runs."""
+    return guarded(web_data.payload, growth_pct)
+
+
+if WEB.exists():  # последним: иначе перехватит маршруты API
+    app.mount("/", StaticFiles(directory=WEB, html=True), name="web")
+

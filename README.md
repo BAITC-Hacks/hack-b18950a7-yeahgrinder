@@ -20,8 +20,8 @@ NVIDIA (опц.)    независимая проверка ответов ча�
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 cp .env.example .env          # ключи AI — по желанию
-.venv/bin/streamlit run app.py              # интерфейс
-.venv/bin/uvicorn api:app --reload          # HTTP API, документация на /docs
+.venv/bin/uvicorn api:app --port 8000      # HTTP API (/docs) и интерфейс SupplyAI из web/ на http://127.0.0.1:8000
+.venv/bin/streamlit run app.py              # запасной интерфейс для аналитика
 .venv/bin/python -m pytest -q               # тесты
 ```
 
@@ -177,8 +177,10 @@ LangGraph: модель ⇄ инструменты, не больше 6 шаго
 ## Структура
 
 ```text
-app.py            Streamlit-интерфейс
-api.py            FastAPI
+web/              интерфейс SupplyAI (JS, без сборки) — данные из /ui/data
+web_data.py       адаптер расчёта для web/
+app.py            запасной Streamlit-интерфейс
+api.py            FastAPI: API сервиса + страница web/
 service.py        общий сервис: расчёт, хранение, решения, экспорт, what-if
 config.yaml       параметры расчёта и AI
 engine/load.py    загрузка выгрузок 1С по поставщикам, кэш, оговорки при битых файлах

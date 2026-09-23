@@ -141,7 +141,12 @@ def compute(ds: Dataset, params: Params | None = None, rules=None) -> Result:
             "horizon_days": int(o["horizon_days"]), "lead_time_days": int(o["lead_days"]),
             "max_monthly_raw": float(o["max_monthly_raw"]), "reason_codes": codes, "reason_text": text,
             "excluded_events": excluded.get(code, []), "restored_events": restored.get(code, []),
-            "forecast_months": o["forecast_months"], "flags": [c for c in codes if c in FLAG_CODES]})
+            "forecast_months": o["forecast_months"], "flags": [c for c in codes if c in FLAG_CODES],
+            "group_name": None if pd.isna(o["group_name"]) else str(o["group_name"]),
+            "category": str(o["category"]) if o["category"] else None,
+            "service_level": float(o["service_level"]),
+            "unit_cost": o["unit_cost"], "order_value": round(qty * o["unit_cost"], 2) if o["unit_cost"] else None,
+            "stock_source": o["stock_source"], "lead_source": o["lead_source"]})
     orders = pd.DataFrame(rows, columns=list(OrderLine.model_fields))
     orders = orders.sort_values("supplier", kind="stable").reset_index(drop=True)  # IEK, затем SE
     bad = validate_orders(orders)
