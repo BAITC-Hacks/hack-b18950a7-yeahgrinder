@@ -13,7 +13,7 @@ const sheetXml = (data, widths) => `<?xml version="1.0" encoding="UTF-8"?><works
   }).join('')}</row>`).join('')}</sheetData></worksheet>`;
 // meta = {by, at}: кто и когда утвердил — отдельным листом, лист «Заказ» остаётся чистым для импорта в 1С
 export function buildWorkbook(rows, meta = {}) {
-  const columns = ['Код 1С','Артикул','Наименование','Ед.','Количество','Поставщик','Срочность'];
+  const columns = ['Код 1С','Артикул','Наименование','Ед.','Количество','Кратность','Поставщик','Срочность','Обоснование'];
   const data = [columns, ...rows];
   const sheet = data.map((row,i)=>`<row r="${i+1}">${row.map((v,j)=>{
     const ref = `${String.fromCharCode(65+j)}${i+1}`;
@@ -24,7 +24,7 @@ export function buildWorkbook(rows, meta = {}) {
     '_rels/.rels':'<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
     'xl/workbook.xml':`<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Заказ" sheetId="1" r:id="rId1"/>${meta.by?'<sheet name="Утверждение" sheetId="2" r:id="rId2"/>':''}</sheets></workbook>`,
     'xl/_rels/workbook.xml.rels':`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>${meta.by?'<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>':''}</Relationships>`,
-    'xl/worksheets/sheet1.xml':`<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols><col min="1" max="2" width="24" customWidth="1"/><col min="3" max="3" width="55" customWidth="1"/><col min="4" max="7" width="23" customWidth="1"/></cols><sheetData>${sheet}</sheetData><autoFilter ref="A1:G${data.length}"/></worksheet>`,
+    'xl/worksheets/sheet1.xml':`<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols><col min="1" max="2" width="24" customWidth="1"/><col min="3" max="3" width="55" customWidth="1"/><col min="4" max="8" width="16" customWidth="1"/><col min="9" max="9" width="110" customWidth="1"/></cols><sheetData>${sheet}</sheetData><autoFilter ref="A1:I${data.length}"/></worksheet>`,
   };
   if (meta.by) files['xl/worksheets/sheet2.xml'] = sheetXml([['Утвердил', meta.by], ['Дата и время', new Date(meta.at).toLocaleString('ru-RU')],
     ['Позиций', rows.length], ['Отправка поставщику', 'нет — файл для загрузки в 1С']], [24, 44]);

@@ -119,3 +119,17 @@ td.product .product-open,td.product .product-open strong{white-space:normal}
 td.product .product-open strong{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.4}
 /* Логотип QadamSupply вместо знака «M» */
 .brand-logo{width:32px;height:30px;object-fit:contain;flex:none;display:block}
+/* Тренд спроса по категориям (обзор) */
+.category-trends{margin-top:16px}
+.trend-list{display:grid;gap:2px;margin-top:8px}
+.trend-row{display:grid;grid-template-columns:minmax(140px,1fr) 160px 64px 110px;align-items:center;gap:16px;padding:10px 8px;border:0;border-bottom:1px solid #eef1f5;background:none;font:inherit;text-align:left;cursor:pointer;border-radius:8px}
+.trend-row:hover{background:#f7f8fa}
+.trend-name{font-size:14px;font-weight:500;color:#1f2937}
+.trend-name small{display:block;font-size:12px;font-weight:400;color:#667085}
+.trend-spark{width:160px;height:36px}
+.trend-change{font-size:14px;font-weight:600;color:#1f2937;text-align:right}
+.trend-change.up{color:#067647}.trend-change.down{color:#b42318}
+.trend-fc{font-size:12px;color:#667085}
+@media(max-width:720px){.trend-row{grid-template-columns:1fr 64px}.trend-spark,.trend-fc{display:none}}
+.trend-row{grid-template-columns:minmax(140px,220px) minmax(120px,1fr) 64px 110px}
+.trend-spark{width:100%;max-width:360px}

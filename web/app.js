@@ -39,6 +39,7 @@ function products(){return allProducts.map(p=>saved.scenario==='growth'?{...p,..
 function find(id){return products().find(p=>p.id===id);}
 function quantity(p){return saved.edits[p.id]?.qty ?? p.recommended_qty;}
 function unitCost(p){return p.unit_cost ?? (p.order_value&&p.recommended_qty?p.order_value/p.recommended_qty:null);}
+function rationale(p){const base=p.reason_text||'';return changed(p)?`${base} Менеджер изменил количество: ${fmt(p.recommended_qty)} → ${fmt(quantity(p))} ${p.unit}${comment(p)?` (${comment(p)})`:''}.`.trim():base;}
 function changed(p){return quantity(p)!==p.recommended_qty;}
 function comment(p){return saved.edits[p.id]?.comment||'';}
 function filtered(){const q=state.query.trim().toLocaleLowerCase('ru');return products().filter(p=>(state.supplier==='Все'||p.supplier===state.supplier)&&(state.category==='Все'||p.category===state.category)&&(state.transit==='Все'||(state.transit==='Есть'?p.in_transit_in_horizon>0:!p.in_transit_in_horizon))&&(state.oneoff==='Все'||(p.excluded_events?.length>0))&&(state.abc==='Все'||p.abc===state.abc)&&(!q||`${p.name} ${p.article} ${p.sku} ${p.supplier}`.toLocaleLowerCase('ru').includes(q)));}
@@ -94,6 +95,40 @@ function supplierKpis(ps){
   return `<article class="card supplier-kpi"><div class="supplier-kpi-head"><div class="supplier-logo ${i?'se':''}">${i?'SE':'IEK'}</div><div class="supplier-kpi-title"><h2>${s}</h2><div class="card-sub">${fmt(rows.length)} товаров · поставка ${esc(demo.leadText?.[s]||(i?'45 дней · допущение':'24–30 дней · демо-срок'))}</div></div>${value?`<div class="supplier-value" title="${esc(KPI_TIPS.value)}"><small>Сумма заказа</small><strong>${money(value)}</strong></div>`:''}</div><div class="kpi-grid">${tiles.map(([label,v,hint,tip,action,tone])=>`<button class="kpi ${tone}" data-action="${action}" data-supplier="${s}" title="${esc(KPI_TIPS[tip])}"><span>${label}</span><strong>${fmt(v)}</strong><small>${hint}</small></button>`).join('')}</div>${estimated?`<div class="kpi-note">${icon('info')}<span>${estimated===rows.length?`Остаток всех товаров ${i?'поставщика':'ИЭК'}`:`Остаток ${fmt(estimated)} ${estimated%10===1&&estimated%100!==11?'товара':'товаров'}`} — оценка: приходы за сентябрь в выгрузке не видны. Сверьте с 1С перед заказом.</span></div>`:''}</article>`;}).join('');
  return cards?`<section class="supplier-kpis" aria-label="Показатели по поставщикам">${cards}</section>`:'';
 }
+function categoryTrends(ps){
+ // Demand index per category: each product is normalised to its own actual-month mean (units differ:
+ // шт/м/упак), then averaged per month. 100 = the category's usual level; dashed = forecast.
+ const win=p=>(p.history||[]).map(h=>h.month).join('|'),freq={};for(const p of ps)freq[win(p)]=(freq[win(p)]||0)+1;
+ const ref=Object.entries(freq).sort((a,b)=>b[1]-a[1])[0]?.[0]||'',labels=ref?ref.split('|'):[];
+ if(labels.length<5)return '';
+ const byCat={};
+ for(const p of ps){
+  if(win(p)!==ref)continue;
+  const act=(p.history||[]).filter(h=>h.raw!==null&&h.clean!==null);
+  const mean=act.reduce((a,h)=>a+h.clean,0)/(act.length||1);
+  if(act.filter(h=>h.clean>0).length<4||!(mean>0))continue;  // regular sellers only: a lone sale would dominate the index
+  const row={};for(const h of p.history){const v=h.raw!==null?h.clean:h.forecast;if(v!==null)row[h.month]=v/mean*100;}
+  (byCat[p.category]??=[]).push(row);
+ }
+ const isFc=Object.fromEntries((ps.find(p=>win(p)===ref)?.history||[]).map(h=>[h.month,h.raw===null]));
+ const avg=a=>a.reduce((x,y)=>x+y,0)/a.length;
+ const med=a=>{const b=[...a].sort((x,y)=>x-y),m=b.length>>1;return b.length%2?b[m]:(b[m-1]+b[m])/2;};  // robust to single outlier products
+ const rows=Object.entries(byCat).filter(([,l])=>l.length>=10).map(([cat,l])=>{
+  const idx=labels.map(m=>{const v=l.map(r=>r[m]).filter(v=>v!==undefined);return v.length?med(v):null;});
+  const act=idx.filter((v,i)=>v!==null&&!isFc[labels[i]]),fc=idx.filter((v,i)=>v!==null&&isFc[labels[i]]);
+  const recent=act.slice(-3),early=act.slice(0,3);
+  return {cat,n:l.length,idx,change:Math.round((avg(recent)/avg(early)-1)*100),fc:fc.length?Math.round((avg(fc)/avg(recent)-1)*100):null};
+ }).sort((a,b)=>b.n-a.n).slice(0,8);
+ if(!rows.length)return '';
+ const actLabels=labels.filter(m=>!isFc[m]);
+ const spark=r=>{const vals=r.idx.filter(v=>v!==null),lo=Math.min(...vals),hi=Math.max(...vals),span=hi-lo||1;
+  const X=i=>4+i*(152/(labels.length-1)),Y=v=>32-(v-lo)/span*28;
+  const line=keep=>r.idx.map((v,i)=>v===null||!keep(i)?'':`${X(i).toFixed(1)},${Y(v).toFixed(1)}`).filter(Boolean).join(' ');
+  const lastAct=labels.findLastIndex(m=>!isFc[m]);
+  return `<svg class="trend-spark" viewBox="0 0 160 36" aria-hidden="true"><polyline points="${line(i=>i<=lastAct)}" fill="none" stroke="#475467" stroke-width="1.6"/><polyline points="${line(i=>i>=lastAct)}" fill="none" stroke="#98a2b3" stroke-width="1.6" stroke-dasharray="3 3"/></svg>`;};
+ const pct=v=>v===null?'—':`${v>0?'+':v<0?'−':''}${Math.abs(v)}%`;
+ return `<section class="card category-trends"><div class="card-heading"><div><h2>Тренд спроса по категориям</h2><div class="card-sub">Медианный индекс спроса без разовых сделок, 100 — обычный уровень товара · изменение: ${actLabels.slice(-3)[0]}–${actLabels.at(-1)} к ${actLabels[0]}–${actLabels[2]} · пунктир — прогноз</div></div></div><div class="trend-list">${rows.map(r=>`<button class="trend-row" data-action="category-trend" data-category="${esc(r.cat)}"><span class="trend-name">${esc(r.cat)}<small>${r.n} товаров</small></span>${spark(r)}<span class="trend-change ${r.change>=5?'up':r.change<=-5?'down':''}">${pct(r.change)}</span><span class="trend-fc">прогноз ${pct(r.fc)}</span></button>`).join('')}</div></section>`;
+}
 function overview(){
  const ps=products(), counts=Object.fromEntries(Object.keys(urgency).map(k=>[k,ps.filter(p=>p.urgency===k).length]));
  const needs=ps.filter(p=>p.recommended_qty>0), critical=counts.CRITICAL, transit=ps.filter(p=>p.in_transit_in_horizon>0).length;
@@ -109,6 +144,7 @@ function overview(){
  ${supplierKpis(ps)}
  <section class="analytics"><article class="card"><div class="card-heading"><div><h2>Продажи и прогноз</h2><div class="card-sub">${cp.history_label||(cp.id==='iek-loop'?'Архивный демо-кейс · 2025':'Апрель — ноябрь 2026')} · ${cp.unit}</div></div><select id="chart-product" class="mini-select" aria-label="Товар для графика">${chartList.map(p=>`<option value="${p.id}" ${p.id===cp.id?'selected':''}>${esc(p.name)}</option>`).join('')}</select></div>${chart(cp)}<div class="card-bottom"><span>График базового сценария</span><button class="btn text small" data-action="product" data-id="${cp.id}">Разобрать ${icon('arrow')}</button></div></article>
  <article class="card"><div class="card-heading"><div><h2>Срочность пополнения</h2><div class="card-sub">${demo.live?'Все товары выгрузки':'Все товары демо-набора'}</div></div>${icon('filter')}</div><div class="risk-body"><div class="donut" style="background:conic-gradient(${stops})"><div class="donut-center"><strong>${ps.length}</strong><span>позиций</span></div></div><div class="risk-legend">${Object.keys(counts).map(k=>`<button class="risk-item risk-filter" data-action="risk" data-risk="${k}"><span class="risk-label"><i class="risk-swatch" style="background:${colors[k]}"></i>${urgency[k].label}</span><strong>${counts[k]}</strong></button>`).join('')}</div></div><div class="card-bottom"><span>Критичных позиций: ${critical}</span><button class="btn text small" data-action="urgent">Посмотреть ${icon('arrow')}</button></div></article></section>
+ ${categoryTrends(ps)}
  <section class="attention"><div class="attention-head"><div><h2>Требуют внимания</h2><p>Сначала критичные позиции и короткий запас</p></div>${btn('Все рекомендации '+icon('arrow'),'recommendations')}</div>${table(attention)}</section>
 `;
 }
@@ -217,16 +253,17 @@ function settings(){
 
 function download(blob,name){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);}
 function exportCsv(){
- if(!saved.approved)return;
+ if(!saved.approved||staleApproval())return;
  const cell=v=>{const t=String(v??'');return /[;"\n]/.test(t)?`"${t.replace(/"/g,'""')}"`:t;};
- const head=['Код 1С','Артикул','Наименование','Ед.','Количество','Поставщик','Срочность'];
+ const head=['Код 1С','Артикул','Наименование','Ед.','Количество','Кратность','Поставщик','Срочность','Обоснование'];
  const lines=[head,...saved.approved.rows].map(r=>r.map(cell).join(';'));
  if(saved.approved.by)lines.push('',`Утвердил;${cell(saved.approved.by)};${new Date(saved.approved.at).toLocaleString('ru-RU')}`);
  download(new Blob(['﻿'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'}),`QadamSupply-${saved.approved.at.slice(0,10)}.csv`);
  toast('CSV сформирован из утверждённых количеств');
 }
+function staleApproval(){if(saved.approved?.rows?.[0]?.length===9)return false;saved.approved=null;persist();render();toast('Формат выгрузки обновился — подтвердите заказ ещё раз');return true;}
 function exportApproved(){
- if(!saved.approved)return;
+ if(!saved.approved||staleApproval())return;
  download(buildWorkbook(saved.approved.rows,{by:saved.approved.by,at:saved.approved.at}),`QadamSupply-${saved.approved.at.slice(0,10)}.xlsx`);toast('XLSX сформирован из утверждённых количеств');
 }
 const actions={
@@ -234,6 +271,7 @@ const actions={
  'high-priority':()=>{navigate('Закупки');state.risk='Срочные';render();},
  'urgent':b=>{navigate('Закупки');state.risk='CRITICAL';if(b?.dataset?.supplier)state.supplier=b.dataset.supplier;render();},
  'transit':()=>{navigate('Закупки');state.risk='В пути';render();},
+ 'category-trend':b=>{navigate('Закупки');state.category=b.dataset.category;render();},
  'risk':b=>{navigate('Закупки');state.risk=b.dataset.risk;render();},
  'filter-risk':b=>{state.risk=b.dataset.risk;state.selected.clear();render();},
  'clear-filters':()=>{state.query='';state.supplier='Все';state.category='Все';state.risk='Все';state.transit='Все';state.oneoff='Все';state.abc='Все';state.selected.clear();render();},
@@ -256,7 +294,7 @@ const actions={
  'confirm':showConfirm,
  'close-modal':()=>$('#confirm-dialog').close(),
  'round-moq':()=>{saved.approver=$('#approver')?.value.trim()||saved.approver;saved.draft.map(find).filter(p=>p&&quantity(p)%p.moq!==0).forEach(p=>{saved.edits[p.id]={qty:Math.ceil(quantity(p)/p.moq)*p.moq,comment:comment(p)};});invalidate();persist();render();showConfirm();},
- 'approve':()=>{const by=$('#approver')?.value.trim();if(!$('#acknowledge')?.checked||!by)return;saved.approver=by;const rows=saved.draft.map(find).filter(p=>p&&quantity(p)>0);if(rows.some(p=>quantity(p)%p.moq!==0)){toast('Сначала приведите количества к кратности партии');return;}saved.approved={at:new Date().toISOString(),by,rows:rows.map(p=>[p.sku,p.article,p.name,p.unit,quantity(p),p.supplier,urgency[p.urgency].label])};persist();$('#confirm-dialog').close();render();toast('Заказ утверждён локально. XLSX готов к скачиванию.');},
+ 'approve':()=>{const by=$('#approver')?.value.trim();if(!$('#acknowledge')?.checked||!by)return;saved.approver=by;const rows=saved.draft.map(find).filter(p=>p&&quantity(p)>0);if(rows.some(p=>quantity(p)%p.moq!==0)){toast('Сначала приведите количества к кратности партии');return;}saved.approved={at:new Date().toISOString(),by,rows:rows.map(p=>[p.sku,p.article,p.name,p.unit,quantity(p),p.moq,p.supplier,urgency[p.urgency].label,rationale(p)])};persist();$('#confirm-dialog').close();render();toast('Заказ утверждён локально. XLSX готов к скачиванию.');},
  'what-if':async()=>{const p=find(state.productId);const lead=Math.round(Number($('#wi-lead').value)),extra=Math.round(Number($('#wi-extra').value)||0);
    whatIfs[p.id]={open:true,loading:true,lead,extra};renderProduct();
    try{const run=await ensureRun();const d=await apiPost(`./runs/${run}/what-if`,{supplier:p.supplier,sku:p.sku,lead_time_days:Number.isFinite(lead)&&lead!==p.lead_time_days?lead:null,extra_transit:extra>0?extra:null});
