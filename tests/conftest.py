@@ -43,3 +43,51 @@ def set_lines(ds, sku, months, qty):
         extra = pd.DataFrame([{'date': m + pd.Timedelta(days=4), 'doc': f'X{m:%Y%m}', 'code': sku, 'qty': float(qty)}
                               for m in months])
         ds.lines = pd.concat([ds.lines, extra], ignore_index=True)
+
+
+def pytest_addoption(parser):
+    group = parser.getgroup('supplier archives')
+    group.addoption('--iek-zip', help='Path to the IEK XLSX archive')
+    group.addoption('--se-zip', help='Path to the Systeme Electric XLSX archive')
+
+
+def pytest_configure(config):
+    if bool(config.getoption('--iek-zip')) != bool(config.getoption('--se-zip')):
+        raise pytest.UsageError('Для проверки реальных данных нужны оба параметра: --iek-zip и --se-zip')
+
+
+@pytest.fixture(autouse=True)
+def offline_ai(monkeypatch):
+    """Tests must not call paid LLMs or tracing even if a teammate has a local .env."""
+    for key in ('OPENAI_API_KEY', 'NVIDIA_API_KEY', 'LANGSMITH_API_KEY'):
+        monkeypatch.setenv(key, '')
+    monkeypatch.setenv('LANGCHAIN_TRACING_V2', 'false')
+    monkeypatch.setenv('LANGSMITH_TRACING', 'false')
+
+
+@pytest.fixture(scope='session')
+def partner_inputs(request, tmp_path_factory):
+    from pathlib import Path
+    from scripts.fixture_archives import extract_suppliers
+    paths = [request.config.getoption('--iek-zip'), request.config.getoption('--se-zip')]
+    if not all(paths):
+        pytest.skip('Реальные ZIP не заданы: используйте --iek-zip и --se-zip (docs/TESTING.md).')
+    root = tmp_path_factory.mktemp('partner-inputs')
+    try:
+        extracted = extract_suppliers(*(Path(p).expanduser().resolve() for p in paths), root)
+    except (ValueError, OSError) as error:
+        pytest.fail(str(error))
+    return root, extracted
+
+
+@pytest.fixture(scope='session')
+def partner_dataset(partner_inputs):
+    from engine.load import load
+    return load(partner_inputs[0], use_cache=False)
+
+
+@pytest.fixture(scope='session')
+def partner_result(partner_dataset):
+    from engine.models import Params
+    from engine.run import compute
+    return compute(partner_dataset, Params())

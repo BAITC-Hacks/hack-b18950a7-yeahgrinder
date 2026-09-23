@@ -8,6 +8,7 @@ import threading
 from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from agent.graph import AgentUnavailable, ask, explain_run
@@ -172,4 +173,18 @@ def ui_data(growth_pct: float = Query(20.0, ge=-50, le=100)):
 
 if WEB.exists():  # последним: иначе перехватит маршруты API
     app.mount("/", StaticFiles(directory=WEB, html=True), name="web")
+else:
+    # This branch keeps the frontend at repository root. Serve an explicit allowlist
+    # so source code, credentials and partner data cannot become static assets.
+    FRONTEND_ROOT = Path(__file__).resolve().parent
+    FRONTEND_ASSETS = {"index.html", "styles.css", "app.js", "mockDashboard.js", "export.js"}
 
+    @app.get("/", include_in_schema=False)
+    def frontend_home():
+        return FileResponse(FRONTEND_ROOT / "index.html")
+
+    @app.get("/{asset}", include_in_schema=False)
+    def frontend_asset(asset: str):
+        if asset not in FRONTEND_ASSETS:
+            raise HTTPException(404, "Файл не найден")
+        return FileResponse(FRONTEND_ROOT / asset)

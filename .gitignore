@@ -15,3 +15,7 @@ runs/
 .env.*
 !.env.example
 .pytest_cache/
+
+# Local OS metadata and generated test reports
+.DS_Store
+reports/

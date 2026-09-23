@@ -16,13 +16,18 @@ NVIDIA (опц.)    независимая проверка ответов ча�
 
 Интерфейс SupplyAI: [возможности и файлы frontend](docs/FRONTEND_UI.md).
 
+Проверка проекта с двумя ZIP: [инструкция для участника команды](docs/TESTING.md).
+```bash
+.venv/bin/python scripts/test_project.py --iek-zip "/путь/IEK (1).zip" --se-zip "/путь/Systeme electric (1).zip"
+```
+
 ## Запуск
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 cp .env.example .env          # ключи AI — по желанию
-.venv/bin/uvicorn api:app --port 8000      # HTTP API (/docs) и интерфейс SupplyAI из web/ на http://127.0.0.1:8000
+.venv/bin/uvicorn api:app --port 8000      # HTTP API (/docs) и интерфейс SupplyAI из корня проекта (или web/, если есть) на http://127.0.0.1:8000
 .venv/bin/streamlit run app.py              # запасной интерфейс для аналитика
 .venv/bin/python -m pytest -q               # тесты
 ```
@@ -131,7 +136,7 @@ cp .env.example .env          # ключи AI — по желанию
 Дополнительно: неполный месяц не влияет на заказ, путь после горизонта не вычитается, редкий спрос
 не обнуляется, «нет спроса» не заказывается даже с правилом менеджера, горизонт считается по дням;
 сервис, API и агент (`tests/test_service.py`, `tests/test_api.py`, `tests/test_agent.py`).
-Все 29 тестов — `.venv/bin/python -m pytest -q`.
+Быстрые тесты — `.venv/bin/python scripts/test_project.py`; полный прогон с реальными архивами описан в [docs/TESTING.md](docs/TESTING.md).
 
 ## Утверждение и экспорт
 
@@ -179,10 +184,10 @@ LangGraph: модель ⇄ инструменты, не больше 6 шаго
 ## Структура
 
 ```text
-web/              интерфейс SupplyAI (JS, без сборки) — данные из /ui/data
-web_data.py       адаптер расчёта для web/
+index.html, *.js, styles.css — интерфейс SupplyAI в корне (JS, без сборки), данные из /ui/data
+web_data.py       адаптер расчёта для frontend
 app.py            запасной Streamlit-интерфейс
-api.py            FastAPI: API сервиса + страница web/
+api.py            FastAPI: API сервиса + frontend (раздача только разрешённых файлов)
 service.py        общий сервис: расчёт, хранение, решения, экспорт, what-if
 config.yaml       параметры расчёта и AI
 engine/load.py    загрузка выгрузок 1С по поставщикам, кэш, оговорки при битых файлах
