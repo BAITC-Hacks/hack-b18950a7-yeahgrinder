@@ -334,3 +334,8 @@ td.product .product-open strong{display:-webkit-box;-webkit-line-clamp:2;-webkit
 .ans .ans-link{border:0;background:none;padding:0;font:inherit;color:#2869c9;text-decoration:underline dotted;cursor:pointer;text-align:left}
 .ans .ans-link:hover{color:#1c4fa0}
 .msg.bot .ans{color:#2c3d54}
+
+.today-card.money:before{background:#2f8a5c}
+.today-card.money .today-step{background:#edf8f1;color:#1f6b47;font-size:15px}
+.money-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.runout{margin:6px 0 0!important;font-size:12.5px!important;color:#56667c!important}
