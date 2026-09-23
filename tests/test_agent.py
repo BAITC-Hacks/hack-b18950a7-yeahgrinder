@@ -96,3 +96,39 @@ def test_numbers_from_question_are_not_flagged(run):
     model = ScriptedModel([AIMessage("Если срок поставки 60 дней, заказ станет больше.")])
     reply = ask(service, result.run_id, "Что будет при сроке поставки 60 дней?", "t3", model=model, use_critic=False)
     assert reply["numbers_ok"]
+
+
+def test_follow_up_from_memory_is_not_flagged(run):
+    # Second turn answers from the first turn's tool result without calling tools again.
+    service, result = run
+    qty = int(result.orders[result.orders.supplier == "IEK"].iloc[0].recommended_qty)
+    first = ScriptedModel([
+        AIMessage("", tool_calls=[{"name": "get_sku_explanation", "args": {"sku": "001_"}, "id": "c1"}]),
+        AIMessage(f"Заказ {qty} шт."),
+    ])
+    ask(service, result.run_id, "Почему?", "memo", model=first, use_critic=False)
+    reply = ask(service, result.run_id, "Повтори итог", "memo",
+                model=ScriptedModel([AIMessage(f"Итог — {qty} шт.")]), use_critic=False)
+    assert reply["numbers_ok"], reply["unsupported_numbers"]
+
+
+def test_list_orders_transit_filter_counts_exactly(run):
+    service, result = run
+    tools = {t.name: t for t in make_tools(service, result.run_id)}
+    everything = json.loads(tools["list_orders"].invoke({}))["total"]
+    none = json.loads(tools["list_orders"].invoke({"in_transit": "none"}))["total"]
+    some = json.loads(tools["list_orders"].invoke({"in_transit": "some"}))["total"]
+    assert none + some == everything
+
+
+def test_what_if_delay_is_added_to_current_lead_time(run):
+    service, result = run
+    tools = {t.name: t for t in make_tools(service, result.run_id)}
+    base = result.orders[result.orders.sku == "001_"].iloc[0]
+    delayed = json.loads(tools["what_if"].invoke({"sku": "001_", "lead_time_delay_days": 14}))
+    assert delayed["summary"]["lead_time_days_after"] == int(base.lead_time_days) + 14
+    assert all(c["delta"] >= 0 for c in delayed["changes"])  # a longer lead time never lowers the order
+
+
+def test_number_check_accepts_sign_of_delta():
+    assert check_numbers("Заказ станет на 2 450 шт. меньше", ['{"delta": -2450}']) == []

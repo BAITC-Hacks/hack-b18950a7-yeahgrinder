@@ -20,6 +20,17 @@ import web_data
 
 app = FastAPI(title="Procurement Copilot API", version="1.0")
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+
+@app.middleware("http")
+async def revalidate_web_assets(request, call_next):
+    # Без этого браузер держит старые app.js/styles.css после обновления; no-cache = сверка по ETag (304).
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.endswith((".html", ".js", ".css")):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 WEB = Path(__file__).resolve().parent / "web"
 
 
@@ -157,7 +168,7 @@ def brief(run_id: str, supplier: Supplier):
         raise HTTPException(503, str(exc)) from exc
 
 
-# ---------------------------------------------------------------- веб-интерфейс (web/, SupplyAI)
+# ---------------------------------------------------------------- веб-интерфейс (web/, QadamSupply)
 
 @app.on_event("startup")
 def warm_ui_cache():

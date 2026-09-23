@@ -48,20 +48,29 @@ def make_tools(service, run_id: str):
     def get_run_summary(supplier: Literal["IEK", "Systeme Electric"] | None = None) -> str:
         """Сводка расчёта: число позиций к заказу, критичных, суммарные количества по единицам и оговорки."""
         summary = [s for s in result.summary if supplier is None or s["supplier"] == supplier]
+        # Effective lead time per supplier (params hold None when it comes from the data).
+        lead = orders.groupby("supplier").lead_time_days.median().round().astype(int).to_dict()
         return dump({"run_id": run_id, "as_of": str(result.params.as_of), "summary": summary,
-                     "lead_time_days": result.params.lead_time_days, "review_days": result.params.review_days,
+                     "lead_time_days": lead, "review_days": result.params.review_days,
                      "service_z": result.params.service_z, "warnings": result.warnings})
 
     @tool
     def list_orders(supplier: Literal["IEK", "Systeme Electric"] | None = None,
                     urgency: Literal["CRITICAL", "HIGH", "PLANNED", "OK"] | None = None,
-                    limit: int = 20, sort: Literal["qty", "urgency", "cover_days"] = "urgency") -> str:
-        """Список рекомендованных позиций с фильтром по поставщику и срочности (не больше 50 строк)."""
+                    limit: int = 20, sort: Literal["qty", "urgency", "cover_days"] = "urgency",
+                    in_transit: Literal["any", "none", "some"] = "any") -> str:
+        """Список рекомендованных позиций с фильтром по поставщику, срочности и товару в пути
+        (none — ничего не едет, some — есть в пути). total — точное число позиций под фильтром; строк не больше 50."""
         part = orders
         if supplier:
             part = part[part.supplier == supplier]
         if urgency:
             part = part[part.urgency == urgency]
+        transit = part.in_transit_in_horizon + part.in_transit_later
+        if in_transit == "none":
+            part = part[transit == 0]
+        elif in_transit == "some":
+            part = part[transit > 0]
         if sort == "qty":
             part = part.sort_values("recommended_qty", ascending=False)
         elif sort == "cover_days":
@@ -113,20 +122,35 @@ def make_tools(service, run_id: str):
 
     @tool
     def what_if(sku: str | None = None, supplier: Literal["IEK", "Systeme Electric"] | None = None,
-                lead_time_days: int | None = None, review_days: int | None = None,
-                service_z: float | None = None, extra_transit: int | None = None) -> str:
-        """Пересчёт «что если» без сохранения: срок поставки, период заказа, уровень сервиса, добавочный транзит. Возвращает дельту заказа."""
+                lead_time_days: int | None = None, lead_time_delay_days: int | None = None,
+                review_days: int | None = None, service_z: float | None = None,
+                extra_transit: int | None = None) -> str:
+        """Пересчёт «что если» без сохранения; возвращает дельту заказа.
+        lead_time_days — новый ПОЛНЫЙ срок поставки в днях («если срок будет 60 дней»).
+        lead_time_delay_days — задержка к текущему сроку («поставка задержится на 2 недели» → 14);
+        новый срок = текущий срок товара/поставщика + задержка. Не передавайте задержку как lead_time_days.
+        Также: review_days — период до следующего заказа, service_z — уровень сервиса, extra_transit — доп. товар в пути."""
+        hit = None
         if sku:
             hit = find(sku)
             if hit.empty:
                 return dump({"error": f"Позиция {sku} не найдена"})
             sku, supplier = hit.iloc[0].sku, supplier or hit.iloc[0].supplier
+        if lead_time_delay_days is not None:
+            if lead_time_days is not None:
+                return dump({"error": "Укажите либо новый срок, либо задержку, но не оба"})
+            base = hit if hit is not None else (orders[orders.supplier == supplier] if supplier else orders)
+            lead_time_days = int(round(base.lead_time_days.median())) + int(lead_time_delay_days)
         try:
             res = service.what_if(run_id, supplier=supplier, sku=sku, lead_time_days=lead_time_days,
                                   review_days=review_days, service_z=service_z, extra_transit=extra_transit)
         except ValueError as exc:
             return dump({"error": str(exc)})
         changed = [c for c in res["changes"] if c["delta"]]
+        if sku:
+            base = hit.iloc[0]
+            res["summary"] = {"lead_time_days_before": int(base.lead_time_days), "lead_time_days_after": lead_time_days,
+                              "recommended_qty_before": int(base.recommended_qty), "summary": res["summary"]}
         return dump({"saved": False, "summary": res["summary"], "changed_count": len(changed),
                      "changes": sorted(changed, key=lambda c: -abs(c["delta"]))[:20]})
 

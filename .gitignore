@@ -15,3 +15,6 @@ runs/
 .env.*
 !.env.example
 .pytest_cache/
+
+# снимки и загрузки Playwright MCP
+.playwright-mcp/

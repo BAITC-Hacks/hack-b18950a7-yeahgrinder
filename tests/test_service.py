@@ -35,3 +35,10 @@ def test_what_if_does_not_save_or_change_source(dataset, tmp_path):
     assert result['changes'][0]['delta'] < 0
     assert len(service.memory.list_runs()) == before
     assert dataset.transit.empty
+
+
+def test_what_if_single_sku_returns_only_that_sku(dataset, tmp_path):
+    service = ProcurementService(storage=tmp_path, dataset=dataset)
+    run = service.calculate(Params())
+    result = service.what_if(run.run_id, supplier='IEK', sku='001_', extra_transit=500)
+    assert [c['sku'] for c in result['changes']] == ['001_']

@@ -87,8 +87,13 @@ def ask(service, run_id: str, question: str, thread_id: str, user_id: str = "loc
         outputs = [m.content for m in turn if isinstance(m, ToolMessage)]
         used = [c["name"] for m in turn if isinstance(m, AIMessage) for c in (m.tool_calls or [])]
         with trace.step("verify-numbers", "guardrail", input=answer) as step:
-            # Numbers the manager used in the question («до 60 дней») are known facts, not invented ones.
-            unsupported = check_numbers(answer, outputs + [question])
+            # Known facts: every tool result and tool-call argument in the whole thread (the agent may
+            # answer a follow-up from an earlier turn), the question itself and the run parameters.
+            thread_facts = [m.content for m in state["messages"] if isinstance(m, ToolMessage)]
+            thread_facts += [json.dumps(c["args"], ensure_ascii=False) for m in state["messages"]
+                             if isinstance(m, AIMessage) for c in (m.tool_calls or [])]
+            params = json.dumps(service.get_result(run_id).params.model_dump(mode="json"), ensure_ascii=False)
+            unsupported = check_numbers(answer, thread_facts + [question, params])
             step.update(output={"numbers_ok": not unsupported, "unsupported_numbers": unsupported})
         if use_critic:
             with trace.step("review-answer", "evaluator", input={"question": question, "answer": answer}) as step:
